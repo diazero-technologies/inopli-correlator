@@ -6,7 +6,7 @@ import json
 from utils.event_logger import log_event
 from config.debug import DEBUG_MODE
 
-WEBHOOK_URL = "https://gateway-dev.inopli.com/webhook/send"
+WEBHOOK_URL = "https://gateway.inopli.com/webhook/send"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/117.0 inopli-monitor"
 TOKEN_ENV_VAR = "MS_TOKEN"
 
