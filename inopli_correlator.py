@@ -1,4 +1,4 @@
-# inopli_monitor.py
+# inopli_correlator.py
 
 import time
 import importlib
