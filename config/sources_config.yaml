@@ -2,11 +2,17 @@ data_sources:
   - name: linux_auth
     module: linux
     path: /var/log/auth.log
-    enabled: true
+    enabled: false
     event_types: [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1009]
 
   - name: linux_syslog
     module: linux
     path: /var/log/syslog
-    enabled: true
+    enabled: false
     event_types: [1008, 1009]
+
+  - name: crowdstrike
+    path: /var/log/crowdstrike/output
+    module: crowdstrike
+    enabled: false
+    event_types: [111171, 111172, 111175, 111176, 111177, 111178, 111179, 111180, 111181, 111182]

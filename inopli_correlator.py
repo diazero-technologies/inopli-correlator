@@ -1,6 +1,7 @@
 # inopli_correlator.py
 
 import time
+import threading
 import importlib
 from utils.config_loader import load_config
 from utils.event_logger import log_event
@@ -47,11 +48,14 @@ def main():
         if monitor:
             monitors.append(monitor)
 
-    while True:
-        for monitor in monitors:
-            monitor.run()
-        time.sleep(1)
+    threads = []
+    for monitor in monitors:
+        t = threading.Thread(target=monitor.run, daemon=True)
+        threads.append(t)
+        t.start()
+
+    for t in threads:
+        t.join()
 
 if __name__ == "__main__":
     main()
-
