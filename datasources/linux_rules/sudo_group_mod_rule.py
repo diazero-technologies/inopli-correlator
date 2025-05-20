@@ -6,7 +6,7 @@ from config.debug import DEBUG_MODE
 
 class SudoGroupModificationRule:
     """
-    Detects modification of the sudo group.
+    Detects users added to the sudo group via sudo usermod commands.
     Integrates multi-tenant routing.
     """
     ID = 1004
@@ -20,23 +20,32 @@ class SudoGroupModificationRule:
 
     def analyze_line(self, line):
         try:
-            # Pattern for appending to sudo group
-            if not re.search(r'usermod .* -a ?-G sudo', line):
+            # Debug log for incoming line
+            if DEBUG_MODE:
+                print(f"[DEBUG] SudoGroupModificationRule analyzing line: {line.strip()}")
+
+            # Regex match for COMMAND containing usermod -aG sudo <user>
+            match = re.search(r'COMMAND=.*usermod\s+-aG\s+sudo\s+(\w+)', line)
+            if not match:
+                if DEBUG_MODE:
+                    print("[DEBUG] SudoGroupModificationRule: pattern not found")
                 return
 
-            # Check if this rule is allowed
+            # Ensure rule is enabled at monitor level
             if self.ID not in self.allowed_event_types:
+                if DEBUG_MODE:
+                    print(f"[DEBUG] SudoGroupModificationRule: rule {self.ID} not in allowed_event_types {self.allowed_event_types}")
                 return
 
-            # Extract username from parts
-            parts = line.strip().split()
-            username = None
-            if 'usermod' in parts:
-                idx = parts.index('usermod') + 1
-                if idx < len(parts):
-                    username = parts[idx]
+            # Extract executor (the user who ran sudo)
+            exec_match = re.search(r'sudo:\s*(\w+)\s*:', line)
+            executor = exec_match.group(1) if exec_match else "unknown"
 
-            timestamp_str = datetime.utcnow().isoformat()
+            # Extract target_user (the one added to the group)
+            target_user = match.group(1)
+
+            # Build timestamp
+            timestamp = datetime.utcnow().isoformat()
 
             payload = {
                 "detection_rule_id": self.ID,
@@ -44,21 +53,22 @@ class SudoGroupModificationRule:
                 "rule": self.__class__.__name__,
                 "event_type": self.TYPE,
                 "severity": self.SEVERITY,
-                "timestamp": timestamp_str,
-                "username": username,
+                "timestamp": timestamp,
+                "executor": executor,
+                "target_user": target_user,
                 "raw_event": line.strip(),
-                "message": f"User {username} added to sudo group"
+                "message": f"User '{target_user}' added to sudo group by '{executor}'"
             }
 
-            # Include hostname if provided
+            # Include hostname for tenant filtering if available
             if hasattr(self, 'hostname'):
                 payload['hostname'] = self.hostname
 
-            # Determine tenant and token
+            # Resolve tenant and get token
             tenant_id, token = self.resolve_tenant(payload, self.source_name, self.ID)
             if not token:
                 if DEBUG_MODE:
-                    print(f"[DEBUG] No tenant matched for payload: {payload}")
+                    print(f"[DEBUG] No tenant matched for payload in SudoGroupModificationRule: {payload}")
                 return
 
             if DEBUG_MODE:

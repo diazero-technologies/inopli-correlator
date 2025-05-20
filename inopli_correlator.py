@@ -1,29 +1,36 @@
+import os
 import time
 import threading
 import importlib
+
 from utils.config_loader import load_multi_tenant_config
 
-# Load tenants configuration globally
-TENANTS_CONFIG = load_multi_tenant_config(path="config/multi_tenant_config.yaml")
+# Path para o arquivo unificado de configuração multi-tenant
+CONFIG_PATH = "config/sources_config.yaml"
 
+# Carrega configuração de tenants
+tenants = load_multi_tenant_config(path=CONFIG_PATH)
+print(f"[INFO] Loaded tenants: {list(tenants.keys())} from {CONFIG_PATH}")
 
 def load_monitor(source):
     """
-    Dynamically load and instantiate a monitor for the given source config.
+    Carrega dinamicamente e instancia o monitor
+    para a fonte passada em `source`.
     """
     try:
         module_key = source.get("module", source["name"])
-        module_name = f"datasources.{module_key}"
-        module = importlib.import_module(module_name)
-        class_name = ''.join([part.capitalize() for part in module_key.split('_')]) + "Monitor"
-        monitor_class = getattr(module, class_name)
+        mod = importlib.import_module(f"datasources.{module_key}")
+        cls_name = ''.join(p.capitalize() for p in module_key.split('_')) + "Monitor"
+        monitor_cls = getattr(mod, cls_name)
 
-        # Instantiate monitor with allowed rules
-        return monitor_class(
+        inst = monitor_cls(
             source_name=source["name"],
             file_path=source["path"],
             allowed_event_types=source.get("event_types", [])
         )
+        print(f"[DEBUG] Instantiated monitor for '{source['name']}'")
+        return inst
+
     except Exception as e:
         from utils.event_logger import log_event
         log_event(
@@ -35,42 +42,66 @@ def load_monitor(source):
             event_type="error",
             description=str(e)
         )
+        print(f"[ERROR] Could not load monitor for '{source.get('name')}': {e}")
         return None
 
-
 def main():
-    # Aggregate unique sources across all tenants
+    if not tenants:
+        print(f"[ERROR] No tenants configured in {CONFIG_PATH}. Exiting.")
+        return
+
+    # 1) Agrega todas as fontes habilitadas e une event_types
     aggregated = {}
-    for tenant_id, tenant_data in TENANTS_CONFIG.items():
-        for src_name, src_conf in tenant_data.get("data_sources", {}).items():
-            if not src_conf.get("enabled", False):
+    for tenant_id, td in tenants.items():
+        for src_name, sc in td.get("data_sources", {}).items():
+            if not sc.get("enabled", False):
                 continue
+
             if src_name not in aggregated:
                 aggregated[src_name] = {
                     "name": src_name,
-                    "path": src_conf.get("path"),
-                    "module": src_conf.get("module", src_name),
-                    "event_types": src_conf.get("event_types", [])
+                    "path": sc["path"],
+                    "module": sc.get("module", src_name),
+                    "event_types": set(sc.get("event_types", [])),
                 }
+            else:
+                aggregated[src_name]["event_types"].update(sc.get("event_types", []))
 
-    # Instantiate monitors
+    if not aggregated:
+        print("[ERROR] No enabled data sources found across tenants. Exiting.")
+        return
+
+    # 2) Converte event_types de volta para list
+    for src in aggregated.values():
+        src["event_types"] = list(src["event_types"])
+
+    print(f"[INFO] Aggregated data sources: {list(aggregated.keys())}")
+
+    # 3) Instancia um monitor por fonte
     monitors = []
     for src in aggregated.values():
-        monitor = load_monitor(src)
-        if monitor:
-            monitors.append(monitor)
+        m = load_monitor(src)
+        if m:
+            monitors.append(m)
 
-    # Start each monitor in its own thread
-    threads = []
-    for monitor in monitors:
-        t = threading.Thread(target=monitor.run, daemon=True)
-        threads.append(t)
+    if not monitors:
+        print("[ERROR] No monitors instantiated. Check configuration.")
+        return
+
+    # 4) Roda cada monitor em sua própria thread
+    print(f"[INFO] Starting {len(monitors)} monitor thread(s)...")
+    for m in monitors:
+        t = threading.Thread(target=m.run, daemon=True)
+        print(f"[INFO] Starting thread for: {m.source_name}")
         t.start()
 
-    # Wait for all threads
-    for t in threads:
-        t.join()
-
+    # 5) Mantém o processo vivo
+    print("[INFO] Inopli correlator running indefinitely. Press Ctrl+C to stop.")
+    try:
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        print("[INFO] Shutdown requested. Exiting.")
 
 if __name__ == "__main__":
     main()

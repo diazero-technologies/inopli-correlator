@@ -1,5 +1,5 @@
-import time
 import re
+import time
 from datetime import datetime
 from collections import defaultdict, deque
 from utils.webhook_sender import send_to_inopli
@@ -26,7 +26,8 @@ class UserEnumerationRule:
 
     def analyze_line(self, line):
         try:
-            if "Invalid user" not in line:
+            # Case-insensitive match for invalid user
+            if not re.search(r'invalid user', line, re.IGNORECASE):
                 return
 
             ip = self._extract_ip(line)
@@ -35,18 +36,21 @@ class UserEnumerationRule:
 
             now = time.time()
             timestamp_str = datetime.utcnow().isoformat()
-            self.attempts_by_ip[ip].append(now)
-            self.raw_lines_by_ip[ip].append(line.strip())
-            self._prune(self.attempts_by_ip[ip], self.raw_lines_by_ip[ip], now)
+            times = self.attempts_by_ip[ip]
+            lines = self.raw_lines_by_ip[ip]
+
+            times.append(now)
+            lines.append(line.strip())
+            self._prune(times, lines, now)
 
             if DEBUG_MODE:
-                print(f"[DEBUG] IP {ip} has {len(self.attempts_by_ip[ip])} invalid user attempts")
+                print(f"[DEBUG] IP {ip} has {len(times)} invalid user attempts")
 
-            if len(self.attempts_by_ip[ip]) >= self.THRESHOLD:
-                related_events = list(self.raw_lines_by_ip[ip])
-                self.attempts_by_ip[ip].clear()
-                self.raw_lines_by_ip[ip].clear()
-                self._send_alert(ip, line.strip(), timestamp_str, related_events)
+            if len(times) >= self.THRESHOLD:
+                related_events = list(lines)
+                times.clear()
+                lines.clear()
+                self._send_alert(ip, timestamp_str, related_events)
 
         except Exception as e:
             log_event(
@@ -61,12 +65,11 @@ class UserEnumerationRule:
             if DEBUG_MODE:
                 print(f"[ERROR] {e}")
 
-    def _send_alert(self, ip, log_line, timestamp, related_events):
+    def _send_alert(self, ip, timestamp, related_events):
         # Check if rule is allowed by monitor-level config
         if self.ID not in self.allowed_event_types:
             return
 
-        # Build payload
         payload = {
             "detection_rule_id": self.ID,
             "source": self.source_name,
@@ -75,7 +78,7 @@ class UserEnumerationRule:
             "severity": self.SEVERITY,
             "timestamp": timestamp,
             "ip": ip,
-            "raw_event": log_line,
+            "raw_event": related_events[-1] if related_events else "",
             "related_events": related_events,
             "message": f"User enumeration detected from IP {ip}"
         }
@@ -93,8 +96,6 @@ class UserEnumerationRule:
 
         if DEBUG_MODE:
             print(f"[ALERT] Sending payload to tenant {tenant_id}: {payload}")
-
-        # Send with tenant-specific token
         send_to_inopli(payload, token_override=token)
 
     def _prune(self, times, lines, now):

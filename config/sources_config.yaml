@@ -3,28 +3,31 @@ tenants:
     name: "Empresa A"
     token: "abcde12345"
     data_sources:
-      linux:
-        name: "linux"
+      - name: "linux_auth"
         path: "/var/log/auth.log"
         enabled: true
         module: "linux"
-        event_types: [1001]
-        filters:
-          hostname: ["host-a", "host-b"]
+        event_types: [1001, 1002, 1007, 1004, 1006]
+        filters: {}
 
-      wazuh_alerts:
-        name: "wazuh_alerts"
-        path: "/var/ossec/logs/alerts/alerts.json"
+      - name: "linux_syslog"
+        path: "/var/log/syslog"
         enabled: true
+        module: "linux"
+        event_types: [1004]
+        filters: {}
+
+      - name: "wazuh_alerts"
+        path: "/var/ossec/logs/alerts/alerts.json"
+        enabled: false
         module: "wazuh"
-        event_types: [1002, 1003]
+        event_types: [1111002, 111111003]
         filters:
           agent_ids: [10, 11, 12]
 
-      crowdstrike:
-        name: "crowdstrike"
+      - name: "crowdstrike"
         path: "/var/log/crowdstrike/events.log"
-        enabled: true
+        enabled: false
         module: "crowdstrike"
         event_types: [111171, 111172]
         filters:
@@ -34,29 +37,24 @@ tenants:
     name: "Empresa B"
     token: "zyxw98765"
     data_sources:
-      linux:
-        name: "linux"
-        path: "/var/log/secure"
+      - name: "linux"
+        path: "/var/log/auth.log"
         enabled: true
         module: "linux"
-        event_types: [1001]
-        filters:
-          hostname: ["host-x"]
+        event_types: [1003, 1008, 1009]
+        filters: {}
 
-      wazuh_alerts:
-        name: "wazuh_alerts"
+      - name: "wazuh_alerts"
         path: "/var/ossec/logs/alerts/alerts.json"
-        enabled: true
+        enabled: false
         module: "wazuh"
-        event_types: [1002]
+        event_types: [10021111]
         filters:
           agent_ids: [45, 46, 47]
 
-      crowdstrike:
-        name: "crowdstrike"
+      - name: "crowdstrike"
         path: "/opt/logs/cs.log"
         enabled: false
         module: "crowdstrike"
         event_types: []
         filters: {}
-
