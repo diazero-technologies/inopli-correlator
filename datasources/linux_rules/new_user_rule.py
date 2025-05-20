@@ -1,5 +1,3 @@
-# datasources/linux_rules/new_user_rule.py
-
 import re
 from datetime import datetime
 from utils.webhook_sender import send_to_inopli
@@ -9,24 +7,26 @@ from config.debug import DEBUG_MODE
 class NewUserCreationRule:
     """
     Detects creation of new users on the system via adduser/useradd logs.
+    Integrates multi-tenant routing.
     """
-
-    detection_rule_id = 1006
+    ID = 1006
     TYPE = "new_user_creation"
     SEVERITY = "high"
 
     def __init__(self, source_name, allowed_event_types):
         self.source_name = source_name
         self.allowed_event_types = allowed_event_types
+        # hostname and resolve_tenant will be injected by the monitor
 
     def analyze_line(self, line):
         try:
             if not self._matches_user_creation(line):
                 return
 
-            if self.detection_rule_id not in self.allowed_event_types:
+            # Check if rule is allowed by monitor-level config
+            if self.ID not in self.allowed_event_types:
                 if DEBUG_MODE:
-                    print(f"[DEBUG] Rule {self.__class__.__name__} skipped due to event type config.")
+                    print(f"[DEBUG] Rule {self.__class__.__name__} skipped due to config.")
                 return
 
             timestamp = datetime.utcnow().isoformat()
@@ -34,7 +34,7 @@ class NewUserCreationRule:
             log_line = line.strip()
 
             payload = {
-                "detection_rule_id": self.detection_rule_id,
+                "detection_rule_id": self.ID,
                 "source": self.source_name,
                 "rule": self.__class__.__name__,
                 "event_type": self.TYPE,
@@ -45,9 +45,20 @@ class NewUserCreationRule:
                 "message": f"New system user created: '{username}'"
             }
 
+            # Attach hostname for tenant filtering if available
+            if hasattr(self, 'hostname'):
+                payload['hostname'] = self.hostname
+
+            # Determine tenant and token
+            tenant_id, token = self.resolve_tenant(payload, self.source_name, self.ID)
+            if not token:
+                if DEBUG_MODE:
+                    print(f"[DEBUG] No tenant matched for payload: {payload}")
+                return
+
             if DEBUG_MODE:
-                print(f"[ALERT] Sending payload: {payload}")
-            send_to_inopli(payload)
+                print(f"[ALERT] Sending NewUserCreation alert to tenant {tenant_id}")
+            send_to_inopli(payload, token_override=token)
 
         except Exception as e:
             log_event(

@@ -1,5 +1,3 @@
-# datasources/linux_rules/crontab_mod_rule.py
-
 import re
 from datetime import datetime
 from utils.webhook_sender import send_to_inopli
@@ -9,22 +7,25 @@ from config.debug import DEBUG_MODE
 class CrontabModificationRule:
     """
     Detects crontab changes or scheduling of persistence mechanisms via cron jobs.
+    Integrates multi-tenant routing.
     """
-
-    detection_rule_id = 1008
+    ID = 1008
     TYPE = "cron_modification"
     SEVERITY = "high"
 
     def __init__(self, source_name, allowed_event_types):
         self.source_name = source_name
         self.allowed_event_types = allowed_event_types
+        # hostname and resolve_tenant will be injected by the monitor
 
     def analyze_line(self, line):
         try:
+            # Skip if no matching pattern
             if not self._matches_crontab_change(line):
                 return
 
-            if self.detection_rule_id not in self.allowed_event_types:
+            # Skip if rule not allowed
+            if self.ID not in self.allowed_event_types:
                 if DEBUG_MODE:
                     print(f"[DEBUG] Rule {self.__class__.__name__} skipped due to config.")
                 return
@@ -34,7 +35,7 @@ class CrontabModificationRule:
             log_line = line.strip()
 
             payload = {
-                "detection_rule_id": self.detection_rule_id,
+                "detection_rule_id": self.ID,
                 "source": self.source_name,
                 "rule": self.__class__.__name__,
                 "event_type": self.TYPE,
@@ -45,9 +46,20 @@ class CrontabModificationRule:
                 "message": f"Crontab modified or suspicious cron job activity by user '{user}'"
             }
 
+            # Attach hostname for tenant filtering if available
+            if hasattr(self, 'hostname'):
+                payload['hostname'] = self.hostname
+
+            # Resolve tenant and token
+            tenant_id, token = self.resolve_tenant(payload, self.source_name, self.ID)
+            if not token:
+                if DEBUG_MODE:
+                    print(f"[DEBUG] No tenant matched for payload: {payload}")
+                return
+
             if DEBUG_MODE:
-                print(f"[ALERT] Sending payload: {payload}")
-            send_to_inopli(payload)
+                print(f"[ALERT] Sending crontab modification alert to tenant {tenant_id}")
+            send_to_inopli(payload, token_override=token)
 
         except Exception as e:
             log_event(

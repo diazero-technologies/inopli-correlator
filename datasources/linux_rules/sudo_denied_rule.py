@@ -1,6 +1,5 @@
-# datasources/linux_rules/sudo_denied_rule.py
-
 import re
+import time
 from datetime import datetime
 from utils.webhook_sender import send_to_inopli
 from utils.event_logger import log_event
@@ -8,76 +7,56 @@ from config.debug import DEBUG_MODE
 
 class SudoDeniedRule:
     """
-    Detects attempts to run sudo by users not listed in the sudoers file.
+    Detects denied sudo attempts.
+    Integrates multi-tenant routing.
     """
-
-    detection_rule_id = 1003
+    ID = 1003
     TYPE = "sudo_denied"
     SEVERITY = "medium"
 
     def __init__(self, source_name, allowed_event_types):
         self.source_name = source_name
         self.allowed_event_types = allowed_event_types
+        # hostname and resolve_tenant injected by monitor
 
     def analyze_line(self, line):
         try:
-            if not re.search(r'user .*not in sudoers', line, re.IGNORECASE):
+            if not re.search(r'sudo: .*: 3 incorrect password attempts', line):
                 return
 
-            if self.detection_rule_id not in self.allowed_event_types:
-                if DEBUG_MODE:
-                    print(f"[DEBUG] Rule {self.__class__.__name__} skipped due to event type config.")
-                return
-
-            timestamp_str = datetime.utcnow().isoformat()
             user = self._extract_user(line)
-            ip = self._extract_ip(line)
-            log_line = line.strip()
+            timestamp_str = datetime.utcnow().isoformat()
 
             payload = {
-                "detection_rule_id": self.detection_rule_id,
+                "detection_rule_id": self.ID,
                 "source": self.source_name,
                 "rule": self.__class__.__name__,
                 "event_type": self.TYPE,
                 "severity": self.SEVERITY,
                 "timestamp": timestamp_str,
-                "ip": ip,
                 "username": user,
-                "raw_event": log_line,
-                "message": f"Sudo denied attempt by user '{user}'"
+                "raw_event": line.strip(),
+                "message": f"Sudo denied for user {user}"
             }
 
+            if hasattr(self, 'hostname'):
+                payload['hostname'] = self.hostname
+
+            tenant_id, token = self.resolve_tenant(payload, self.source_name, self.ID)
+            if not token:
+                if DEBUG_MODE:
+                    print(f"[DEBUG] No tenant matched for payload: {payload}")
+                return
+
             if DEBUG_MODE:
-                print(f"[ALERT] Sending payload: {payload}")
-            send_to_inopli(payload)
+                print(f"[ALERT] Sending sudo denied alert to tenant {tenant_id}")
+            send_to_inopli(payload, token_override=token)
 
         except Exception as e:
-            log_event(
-                event_id=999,
-                solution_name="inopli_monitor",
-                data_source=self.source_name,
-                class_name=self.__class__.__name__,
-                method="analyze_line",
-                event_type="error",
-                description=str(e)
-            )
+            log_event(999, "inopli_monitor", self.source_name, self.__class__.__name__, "analyze_line", "error", str(e))
             if DEBUG_MODE:
                 print(f"[ERROR] {e}")
 
     def _extract_user(self, line):
-        match = re.search(r'sudo: (\w+)', line)
-        if match:
-            if DEBUG_MODE:
-                print(f"[DEBUG] Extracted username: {match.group(1)}")
-            return match.group(1)
-        if DEBUG_MODE:
-            print("[DEBUG] Failed to extract username.")
-        return "unknown"
-
-    def _extract_ip(self, line):
-        match = re.search(r'from ([\d\.]+)', line)
-        if match:
-            if DEBUG_MODE:
-                print(f"[DEBUG] Extracted IP: {match.group(1)}")
-            return match.group(1)
-        return "unknown"
+        match = re.search(r'sudo: *([^:]+): 3 incorrect password attempts', line)
+        return match.group(1) if match else None

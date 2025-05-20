@@ -20,6 +20,7 @@ class BruteforceRule:
         self.failed_by_user = defaultdict(deque)
         self.raw_lines_by_ip = defaultdict(deque)
         self.raw_lines_by_user = defaultdict(deque)
+        # hostname and resolve_tenant will be injected by LinuxMonitor
 
     def analyze_line(self, line):
         try:
@@ -31,6 +32,7 @@ class BruteforceRule:
             now = time.time()
             timestamp_str = datetime.utcnow().isoformat()
 
+            # Handle IP-based tracking
             if ip:
                 self.failed_by_ip[ip].append(now)
                 self.raw_lines_by_ip[ip].append(line.strip())
@@ -45,6 +47,7 @@ class BruteforceRule:
                     self.raw_lines_by_ip[ip].clear()
                     self._send_alert(ip, user, line.strip(), timestamp_str, related_events)
 
+            # Handle user-based tracking
             if user:
                 self.failed_by_user[user].append(now)
                 self.raw_lines_by_user[user].append(line.strip())
@@ -65,23 +68,37 @@ class BruteforceRule:
                 print(f"[ERROR] {e}")
 
     def _send_alert(self, ip, username, log_line, timestamp, related_events):
-        if self.ID in self.allowed_event_types:
-            payload = {
-                "detection_rule_id": self.ID,
-                "source": self.source_name,
-                "rule": self.__class__.__name__,
-                "event_type": self.TYPE,
-                "severity": self.SEVERITY,
-                "timestamp": timestamp,
-                "ip": ip,
-                "username": username,
-                "raw_event": log_line,
-                "related_events": related_events,
-                "message": f"Bruteforce detected from IP {ip} targeting user {username}"
-            }
+        # Check if rule is allowed globally for this monitor
+        if self.ID not in self.allowed_event_types:
+            return
+        # Build payload
+        payload = {
+            "detection_rule_id": self.ID,
+            "source": self.source_name,
+            "rule": self.__class__.__name__,
+            "event_type": self.TYPE,
+            "severity": self.SEVERITY,
+            "timestamp": timestamp,
+            "ip": ip,
+            "username": username,
+            "raw_event": log_line,
+            "related_events": related_events,
+            "message": f"Bruteforce detected from IP {ip} targeting user {username}"
+        }
+        # Include hostname for tenant filtering if available
+        if hasattr(self, 'hostname'):
+            payload['hostname'] = self.hostname
+
+        # Resolve tenant and token
+        tenant_id, token = self.resolve_tenant(payload, self.source_name, self.ID)
+        if not token:
             if DEBUG_MODE:
-                print(f"[ALERT] Sending payload: {payload}")
-            send_to_inopli(payload)
+                print(f"[DEBUG] No tenant matched for payload: {payload}")
+            return
+
+        if DEBUG_MODE:
+            print(f"[ALERT] Sending payload to tenant {tenant_id} with token override")
+        send_to_inopli(payload, token_override=token)
 
     def _prune(self, times, lines, now):
         while times and (now - times[0]) > self.WINDOW_SECONDS:

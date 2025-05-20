@@ -1,18 +1,62 @@
-data_sources:
-  - name: linux_auth
-    module: linux
-    path: /var/log/auth.log
-    enabled: false
-    event_types: [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1009]
+tenants:
+  tenant1:
+    name: "Empresa A"
+    token: "abcde12345"
+    data_sources:
+      linux:
+        name: "linux"
+        path: "/var/log/auth.log"
+        enabled: true
+        module: "linux"
+        event_types: [1001]
+        filters:
+          hostname: ["host-a", "host-b"]
 
-  - name: linux_syslog
-    module: linux
-    path: /var/log/syslog
-    enabled: false
-    event_types: [1008, 1009]
+      wazuh_alerts:
+        name: "wazuh_alerts"
+        path: "/var/ossec/logs/alerts/alerts.json"
+        enabled: true
+        module: "wazuh"
+        event_types: [1002, 1003]
+        filters:
+          agent_ids: [10, 11, 12]
 
-  - name: crowdstrike
-    path: /var/log/crowdstrike/output
-    module: crowdstrike
-    enabled: false
-    event_types: [111171, 111172, 111175, 111176, 111177, 111178, 111179, 111180, 111181, 111182]
+      crowdstrike:
+        name: "crowdstrike"
+        path: "/var/log/crowdstrike/events.log"
+        enabled: true
+        module: "crowdstrike"
+        event_types: [111171, 111172]
+        filters:
+          sensor_ids: ["CS-01", "CS-02"]
+
+  tenant2:
+    name: "Empresa B"
+    token: "zyxw98765"
+    data_sources:
+      linux:
+        name: "linux"
+        path: "/var/log/secure"
+        enabled: true
+        module: "linux"
+        event_types: [1001]
+        filters:
+          hostname: ["host-x"]
+
+      wazuh_alerts:
+        name: "wazuh_alerts"
+        path: "/var/ossec/logs/alerts/alerts.json"
+        enabled: true
+        module: "wazuh"
+        event_types: [1002]
+        filters:
+          agent_ids: [45, 46, 47]
+
+      crowdstrike:
+        name: "crowdstrike"
+        path: "/opt/logs/cs.log"
+        enabled: false
+        module: "crowdstrike"
+        event_types: []
+        filters: {}
+

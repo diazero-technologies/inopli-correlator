@@ -7,6 +7,7 @@ from datetime import datetime
 from utils.webhook_sender import send_to_inopli
 from utils.event_logger import log_event
 from config.debug import DEBUG_MODE
+from utils.tenant_router import resolve_tenant
 
 class CrowdstrikeMonitor:
     DETECTION_MAP = {
@@ -26,7 +27,6 @@ class CrowdstrikeMonitor:
         self.source_name = source_name
         self.file_path = file_path
         self.allowed_event_types = allowed_event_types
-        self.offset = 0
 
         if DEBUG_MODE:
             print(f"[DEBUG] Initializing CrowdstrikeMonitor for {source_name} at {file_path}")
@@ -71,29 +71,43 @@ class CrowdstrikeMonitor:
 
             rule_id, severity, message = self.DETECTION_MAP[detect_name]
 
+            # Skip if rule not allowed
             if rule_id not in self.allowed_event_types:
                 return
 
+            timestamp = datetime.utcnow().isoformat()
+            # Build payload
             payload = {
                 "detection_rule_id": rule_id,
                 "source": self.source_name,
                 "rule": self.__class__.__name__,
                 "event_type": detect_name.lower().replace(" ", "_"),
                 "severity": severity,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": timestamp,
                 "hostname": event.get("ComputerName"),
                 "ip": event.get("LocalIP"),
                 "user": event.get("UserName"),
                 "command": event.get("CommandLine"),
                 "file": event.get("FileName"),
+                "sensor_id": event.get("SensorId"),
                 "raw_event": line.strip(),
                 "message": message
             }
 
             if DEBUG_MODE:
-                print(f"[ALERT] Sending alert: {payload}")
+                print(f"[DEBUG] Generated Crowdstrike payload: {payload}")
 
-            send_to_inopli(payload)
+            # Resolve tenant and token
+            tenant_id, token = resolve_tenant(payload, self.source_name, rule_id)
+            if not token:
+                if DEBUG_MODE:
+                    print(f"[DEBUG] No tenant matched for payload: {payload}")
+                return
+
+            if DEBUG_MODE:
+                print(f"[ALERT] Sending Crowdstrike alert to tenant {tenant_id}")
+            # Send with tenant-specific token
+            send_to_inopli(payload, token_override=token)
 
         except Exception as e:
             log_event(

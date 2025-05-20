@@ -3,12 +3,15 @@
 import os
 import time
 import importlib
+import socket
 from utils.event_logger import log_event
 from config.debug import DEBUG_MODE
+from utils.tenant_router import resolve_tenant
 
 class LinuxMonitor:
     """
     Main class for Linux log monitoring. Supports both line-based and filesystem watcher rules.
+    Integrates with multi-tenant logic via `resolve_tenant`.
     """
 
     def __init__(self, source_name, file_path, allowed_event_types):
@@ -19,13 +22,17 @@ class LinuxMonitor:
         self.offset = 0
         self.observer_initialized = False
 
+        # Host metadata for tenant filtering
+        self.hostname = socket.gethostname()
         if DEBUG_MODE:
-            print(f"[DEBUG] Initializing LinuxMonitor for {source_name} at {file_path}")
+            print(f"[DEBUG] Initializing LinuxMonitor for {source_name} at {file_path} on host {self.hostname}")
+
         self._load_rules()
 
     def _load_rules(self):
         """
         Loads rule classes from datasources/linux_rules using explicit mapping.
+        Also injects multi-tenant support into rule instances.
         """
         rule_modules = {
             "bruteforce_rule": "BruteforceRule",
@@ -45,10 +52,22 @@ class LinuxMonitor:
                     print(f"[DEBUG] Loading rule module: {module_name}")
                 module = importlib.import_module(f"datasources.linux_rules.{module_name}")
                 rule_class = getattr(module, class_name)
-                instance = rule_class(self.source_name, self.allowed_event_types)
+
+                # Instantiate rule with source and allowed events
+                instance = rule_class(
+                    self.source_name,
+                    self.allowed_event_types
+                )
+
+                # Inject host metadata and tenant resolver
+                instance.hostname = self.hostname
+                instance.resolve_tenant = resolve_tenant
+
                 self.rules.append(instance)
+
                 if DEBUG_MODE:
                     print(f"[DEBUG] Loaded rule class: {class_name}")
+
             except Exception as e:
                 log_event(
                     event_id=996,
@@ -71,7 +90,7 @@ class LinuxMonitor:
             if DEBUG_MODE:
                 print(f"[DEBUG] Running monitor for {self.source_name}")
 
-            # Start file watchers once
+            # Start filesystem watchers once
             if not self.observer_initialized:
                 for rule in self.rules:
                     if hasattr(rule, "is_filesystem_watcher") and rule.is_filesystem_watcher:
@@ -85,7 +104,7 @@ class LinuxMonitor:
                 raise FileNotFoundError(f"File not found: {self.file_path}")
 
             with open(self.file_path, "r") as file:
-                file.seek(0, os.SEEK_END)  # Vai para o final do arquivo
+                file.seek(0, os.SEEK_END)
 
                 while True:
                     line = file.readline()

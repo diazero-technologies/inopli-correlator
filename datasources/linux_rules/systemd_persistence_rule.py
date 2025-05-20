@@ -1,6 +1,5 @@
-# datasources/linux_rules/systemd_persistence_rule.py
-
 import os
+import re
 from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -12,9 +11,9 @@ class SystemdPersistenceRule(FileSystemEventHandler):
     """
     Detects creation, modification, or deletion of .service files
     in systemd directories using inotify via watchdog.
+    Integrates multi-tenant routing.
     """
-
-    detection_rule_id = 1009
+    ID = 1009
     TYPE = "systemd_persistence"
     SEVERITY = "critical"
     is_filesystem_watcher = True
@@ -40,14 +39,15 @@ class SystemdPersistenceRule(FileSystemEventHandler):
         self.observer.start()
 
     def _trigger_alert(self, path, operation):
-        if self.detection_rule_id not in self.allowed_event_types:
+        # Check if rule is allowed for this monitor
+        if self.ID not in self.allowed_event_types:
             return
 
         timestamp = datetime.utcnow().isoformat()
         log_line = f"{operation.upper()} event on {path}"
 
         payload = {
-            "detection_rule_id": self.detection_rule_id,
+            "detection_rule_id": self.ID,
             "source": self.source_name,
             "rule": self.__class__.__name__,
             "event_type": self.TYPE,
@@ -58,9 +58,20 @@ class SystemdPersistenceRule(FileSystemEventHandler):
             "message": f"Systemd persistence file {operation}: {os.path.basename(path)}"
         }
 
+        # Attach hostname for tenant filtering if available
+        if hasattr(self, 'hostname'):
+            payload['hostname'] = self.hostname
+
+        # Resolve tenant and token
+        tenant_id, token = self.resolve_tenant(payload, self.source_name, self.ID)
+        if not token:
+            if DEBUG_MODE:
+                print(f"[DEBUG] No tenant matched for payload: {payload}")
+            return
+
         if DEBUG_MODE:
-            print(f"[ALERT] Sending payload: {payload}")
-        send_to_inopli(payload)
+            print(f"[ALERT] Sending systemd persistence alert to tenant {tenant_id}: {payload}")
+        send_to_inopli(payload, token_override=token)
 
     def on_created(self, event):
         if not event.is_directory and event.src_path.endswith(".service"):
