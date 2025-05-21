@@ -5,21 +5,21 @@ tenants:
     data_sources:
       - name: "linux_auth"
         path: "/var/log/auth.log"
-        enabled: true
+        enabled: false
         module: "linux"
         event_types: [1001, 1002, 1007, 1004, 1006]
         filters: {}
 
       - name: "linux_syslog"
         path: "/var/log/syslog"
-        enabled: true
+        enabled: false
         module: "linux"
         event_types: [1004]
         filters: {}
 
       - name: "wazuh_alerts"
         path: "/var/ossec/logs/alerts/alerts.json"
-        enabled: true
+        enabled: false
         module: "wazuh_file"
         event_types: [100001, 100002, 100003]  # IDs que devem ser permitidos
         filters:
@@ -39,7 +39,7 @@ tenants:
     data_sources:
       - name: "linux"
         path: "/var/log/auth.log"
-        enabled: true
+        enabled: false
         module: "linux"
         event_types: [1003, 1008, 1009]
         filters: {}
@@ -47,10 +47,10 @@ tenants:
       - name: "wazuh_alerts"
         path: "/var/ossec/logs/alerts/alerts.json"
         enabled: false
-        module: "wazuh"
-        event_types: [10021111]
+        module: "wazuh_file"
+        event_types: [100001, 100002, 100003]  # IDs que devem ser permitidos
         filters:
-          agent_ids: [45, 46, 47]
+          agent_ids: ["001", "002"]
 
       - name: "crowdstrike"
         path: "/opt/logs/cs.log"
