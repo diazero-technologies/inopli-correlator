@@ -33,6 +33,14 @@ tenants:
         filters:
           sensor_ids: ["CS-01", "CS-02"]
 
+      - name: "o365_alerts"
+        path: "/var/ossec/logs/alerts/alerts.json"
+        enabled: false
+        module: "wazuh_o365"
+        event_types: [91556]  # IDs que devem ser permitidos
+        filters:
+          organization_ids: ["abcdefg"]
+
   tenant2:
     name: "Empresa B"
     token: "zyxw98765"

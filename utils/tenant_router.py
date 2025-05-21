@@ -14,24 +14,27 @@ def resolve_tenant(event_payload, source_name, rule_id):
     Returns a tuple (tenant_id, token) if matched, else (None, None).
     """
     for tenant_id, tenant_data in TENANTS_CONFIG.items():
-        # Now data_sources is a list
         ds_list = tenant_data.get("data_sources", []) or []
-        # Find the matching data_source entry by its 'name'
-        ds_conf = next((d for d in ds_list if d.get("name") == source_name and d.get("enabled", False)), None)
+
+        # Find matching data source config for this tenant
+        ds_conf = next(
+            (d for d in ds_list if d.get("name") == source_name and d.get("enabled", False)),
+            None
+        )
         if not ds_conf:
             continue
 
-        # Check if this rule is allowed for the tenant
+        # Check if this rule is allowed
         allowed_rules = ds_conf.get("event_types", []) or []
         if rule_id not in allowed_rules:
             continue
 
-        # Apply filters (fallback to empty dict if None)
+        # Apply filters
         filters = ds_conf.get("filters") or {}
         if not _filters_match(event_payload, source_name, filters):
             continue
 
-        # Matched tenant
+        # Return tenant match
         token = tenant_data.get("token")
         return tenant_id, token
 
@@ -51,7 +54,6 @@ def _filters_match(event_payload, source_name, filters):
                 return False
 
         elif source_name.startswith("linux") and key == "hostname":
-            # For linux sources, name may vary (linux_auth, linux_syslog), but hostname filter applies
             hostname = event_payload.get("hostname")
             if hostname not in values:
                 return False
@@ -59,6 +61,15 @@ def _filters_match(event_payload, source_name, filters):
         elif source_name == "crowdstrike" and key == "sensor_ids":
             sensor_id = event_payload.get("sensor_id")
             if sensor_id not in values:
+                return False
+
+        elif key == "organization_ids":
+            org_id = (
+                event_payload.get("data", {})
+                .get("office365", {})
+                .get("OrganizationId")
+            )
+            if org_id not in values:
                 return False
 
         # Unknown filter key: skip
