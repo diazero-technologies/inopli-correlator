@@ -1,114 +1,65 @@
-import os
-import time
-import threading
-import importlib
-
 from utils.config_loader import load_multi_tenant_config
 
-# Path para o arquivo unificado de configuração multi-tenant
-CONFIG_PATH = "config/sources_config.yaml"
-
-# Carrega configuração de tenants
-tenants = load_multi_tenant_config(path=CONFIG_PATH)
-print(f"[INFO] Loaded tenants: {list(tenants.keys())} from {CONFIG_PATH}")
+# Load tenants config from unified sources_config.yaml
+TENANTS_CONFIG = load_multi_tenant_config(path="config/sources_config.yaml")
 
 
-def load_monitor(source):
+def resolve_tenant(event_payload, source_name, rule_id):
     """
-    Carrega dinamicamente e instancia o monitor
-    para a fonte passada em `source`.
+    Determine which tenant (if any) should receive this event based on:
+    - source_name: name of the data source
+    - rule_id: the detection rule ID
+    - event_payload: the alert payload, including any filter fields
+
+    Returns a tuple (tenant_id, token) if matched, else (None, None).
     """
-    try:
-        module_key = source.get("module", source["name"])
-        mod = importlib.import_module(f"datasources.{module_key}")
-        cls_name = ''.join(p.capitalize() for p in module_key.split('_')) + "Monitor"
-        monitor_cls = getattr(mod, cls_name)
+    for tenant_id, tenant_data in TENANTS_CONFIG.items():
+        # Now data_sources is a list
+        ds_list = tenant_data.get("data_sources", []) or []
+        # Find the matching data_source entry by its 'name'
+        ds_conf = next((d for d in ds_list if d.get("name") == source_name and d.get("enabled", False)), None)
+        if not ds_conf:
+            continue
 
-        inst = monitor_cls(
-            source_name=source["name"],
-            file_path=source["path"],
-            allowed_event_types=source.get("event_types", [])
-        )
-        print(f"[DEBUG] Instantiated monitor for '{source['name']}'")
-        return inst
+        # Check if this rule is allowed for the tenant
+        allowed_rules = ds_conf.get("event_types", []) or []
+        if rule_id not in allowed_rules:
+            continue
 
-    except Exception as e:
-        from utils.event_logger import log_event
-        log_event(
-            event_id=994,
-            solution_name="inopli_monitor",
-            data_source=source.get("name", "unknown"),
-            class_name="DynamicLoader",
-            method="load_monitor",
-            event_type="error",
-            description=str(e)
-        )
-        print(f"[ERROR] Could not load monitor for '{source.get('name')}': {e}")
-        return None
+        # Apply filters (fallback to empty dict if None)
+        filters = ds_conf.get("filters") or {}
+        if not _filters_match(event_payload, source_name, filters):
+            continue
+
+        # Matched tenant
+        token = tenant_data.get("token")
+        return tenant_id, token
+
+    return None, None
 
 
-def main():
-    if not tenants:
-        print(f"[ERROR] No tenants configured in {CONFIG_PATH}. Exiting.")
-        return
+def _filters_match(event_payload, source_name, filters):
+    """
+    Evaluate filter conditions for a given data source against the payload.
+    Returns True if all filters match, False otherwise.
+    """
+    for key, values in filters.items():
+        if source_name == "wazuh_alerts" and key == "agent_ids":
+            agent = event_payload.get("agent", {})
+            agent_id = agent.get("id") if isinstance(agent, dict) else None
+            if agent_id not in values:
+                return False
 
-    # 1) Agrega todas as fontes habilitadas e une event_types
-    aggregated = {}
-    for tenant_id, td in tenants.items():
-        for ds_conf in td.get("data_sources", []) or []:
-            if not ds_conf.get("enabled", False):
-                continue
+        elif source_name.startswith("linux") and key == "hostname":
+            # For linux sources, name may vary (linux_auth, linux_syslog), but hostname filter applies
+            hostname = event_payload.get("hostname")
+            if hostname not in values:
+                return False
 
-            src_name = ds_conf.get("name")
-            if not src_name:
-                continue
+        elif source_name == "crowdstrike" and key == "sensor_ids":
+            sensor_id = event_payload.get("sensor_id")
+            if sensor_id not in values:
+                return False
 
-            if src_name not in aggregated:
-                aggregated[src_name] = {
-                    "name": src_name,
-                    "path": ds_conf.get("path"),
-                    "module": ds_conf.get("module", src_name),
-                    "event_types": set(ds_conf.get("event_types", [])),
-                }
-            else:
-                aggregated[src_name]["event_types"].update(ds_conf.get("event_types", []))
-
-    if not aggregated:
-        print("[ERROR] No enabled data sources found across tenants. Exiting.")
-        return
-
-    # 2) Converte event_types de volta para list
-    for src in aggregated.values():
-        src["event_types"] = list(src["event_types"])
-
-    print(f"[INFO] Aggregated data sources: {list(aggregated.keys())}")
-
-    # 3) Instancia um monitor por fonte
-    monitors = []
-    for src in aggregated.values():
-        m = load_monitor(src)
-        if m:
-            monitors.append(m)
-
-    if not monitors:
-        print("[ERROR] No monitors instantiated. Check configuration.")
-        return
-
-    # 4) Roda cada monitor em sua própria thread
-    print(f"[INFO] Starting {len(monitors)} monitor thread(s)...")
-    for m in monitors:
-        t = threading.Thread(target=m.run, daemon=True)
-        print(f"[INFO] Starting thread for: {m.source_name}")
-        t.start()
-
-    # 5) Mantém o processo vivo
-    print("[INFO] Inopli correlator running indefinitely. Press Ctrl+C to stop.")
-    try:
-        while True:
-            time.sleep(60)
-    except KeyboardInterrupt:
-        print("[INFO] Shutdown requested. Exiting.")
-
-
-if __name__ == "__main__":
-    main()
+        # Unknown filter key: skip
+    return True

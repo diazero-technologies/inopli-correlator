@@ -12,6 +12,7 @@ CONFIG_PATH = "config/sources_config.yaml"
 tenants = load_multi_tenant_config(path=CONFIG_PATH)
 print(f"[INFO] Loaded tenants: {list(tenants.keys())} from {CONFIG_PATH}")
 
+
 def load_monitor(source):
     """
     Carrega dinamicamente e instancia o monitor
@@ -45,6 +46,7 @@ def load_monitor(source):
         print(f"[ERROR] Could not load monitor for '{source.get('name')}': {e}")
         return None
 
+
 def main():
     if not tenants:
         print(f"[ERROR] No tenants configured in {CONFIG_PATH}. Exiting.")
@@ -53,19 +55,23 @@ def main():
     # 1) Agrega todas as fontes habilitadas e une event_types
     aggregated = {}
     for tenant_id, td in tenants.items():
-        for src_name, sc in td.get("data_sources", {}).items():
-            if not sc.get("enabled", False):
+        for ds_conf in td.get("data_sources", []) or []:
+            if not ds_conf.get("enabled", False):
+                continue
+
+            src_name = ds_conf.get("name")
+            if not src_name:
                 continue
 
             if src_name not in aggregated:
                 aggregated[src_name] = {
                     "name": src_name,
-                    "path": sc["path"],
-                    "module": sc.get("module", src_name),
-                    "event_types": set(sc.get("event_types", [])),
+                    "path": ds_conf.get("path"),
+                    "module": ds_conf.get("module", src_name),
+                    "event_types": set(ds_conf.get("event_types", [])),
                 }
             else:
-                aggregated[src_name]["event_types"].update(sc.get("event_types", []))
+                aggregated[src_name]["event_types"].update(ds_conf.get("event_types", []))
 
     if not aggregated:
         print("[ERROR] No enabled data sources found across tenants. Exiting.")
@@ -102,6 +108,7 @@ def main():
             time.sleep(60)
     except KeyboardInterrupt:
         print("[INFO] Shutdown requested. Exiting.")
+
 
 if __name__ == "__main__":
     main()
