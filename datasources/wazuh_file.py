@@ -14,18 +14,22 @@ from utils.tenant_router import resolve_tenant
 class WazuhFileMonitor:
     """
     Monitors the Wazuh alerts.json file using tail -f logic.
-    Filters events by configured rule.id values and sends matching alerts to Inopli,
-    appending detection_rule_id to the payload.
+    Filters events by configured rule.id values (and optionally by agent_ids),
+    then sends matching alerts to Inopli, appending detection_rule_id to the payload.
     """
 
-    def __init__(self, source_name, file_path, allowed_event_types):
+    def __init__(self, source_name, file_path, allowed_event_types, agent_ids=None):
         self.source_name = source_name
         self.file_path = file_path
         self.allowed_event_types = allowed_event_types
+        # se "*" estiver na lista, coleta todos os agentes sem filtro
+        self.agent_ids = agent_ids or []
+        self.collect_all = "*" in self.agent_ids
 
         if DEBUG_MODE:
             print(f"[DEBUG] Initializing {self.__class__.__name__} "
-                  f"for source '{source_name}' at path '{file_path}'")
+                  f"for source '{source_name}' at path '{file_path}' "
+                  f"with agent_ids={self.agent_ids!r}")
 
     def run(self):
         """
@@ -61,6 +65,7 @@ class WazuhFileMonitor:
     def _analyze_line(self, line):
         """
         Processes a single JSON line from alerts.json:
+        - Optionally filters by agent_id (unless collect_all is True)
         - Extracts rule.id and converts it to int
         - Checks if it is in the list of allowed_event_types
         - Adds detection_rule_id to the payload
@@ -68,6 +73,12 @@ class WazuhFileMonitor:
         """
         try:
             data = json.loads(line)
+
+            # --- FILTRO DE AGENT_ID (wildcard support) ---
+            agent_id = data.get("agent", {}).get("id")
+            if not self.collect_all and agent_id not in self.agent_ids:
+                return
+            # ----------------------------------------------
 
             rule_obj = data.get("rule", {})
             rule_id_str = rule_obj.get("id")

@@ -14,18 +14,33 @@ from utils.tenant_router import resolve_tenant
 class WazuhO365Monitor:
     """
     Monitors Wazuh alerts.json for Office 365-related alerts.
-    Filters by rule.id and OrganizationId, and sends matched alerts to Inopli
-    with detection_rule_id included.
+    Filters by rule.id and OrganizationId (with wildcard support),
+    then sends matched alerts to Inopli with detection_rule_id included.
     """
 
-    def __init__(self, source_name, file_path, allowed_event_types):
+    def __init__(
+        self,
+        source_name,
+        file_path,
+        allowed_event_types,
+        org_ids=None,
+        organization_ids=None
+    ):
         self.source_name = source_name
         self.file_path = file_path
         self.allowed_event_types = allowed_event_types
 
+        # aceita tanto org_ids quanto organization_ids vindo do loader
+        ids = organization_ids if organization_ids is not None else (org_ids or [])
+        self.org_ids = ids
+        self.collect_all_orgs = "*" in self.org_ids
+
         if DEBUG_MODE:
-            print(f"[DEBUG] Initializing {self.__class__.__name__} "
-                  f"for source '{source_name}' at path '{file_path}'")
+            print(
+                f"[DEBUG] Initializing {self.__class__.__name__} "
+                f"for source '{source_name}' at path '{file_path}' "
+                f"with org_ids={self.org_ids!r}"
+            )
 
     def run(self):
         try:
@@ -63,11 +78,11 @@ class WazuhO365Monitor:
 
             data = json.loads(line)
 
-            # Must be an Office 365 integration alert
+            # Deve ser um alerta de integração Office365
             if data.get("data", {}).get("integration") != "office365":
                 return
 
-            # Extract rule.id and convert to int
+            # Extrai rule.id e converte para int
             rule_obj = data.get("rule", {})
             rule_id_str = rule_obj.get("id")
             if not rule_id_str:
@@ -78,16 +93,20 @@ class WazuhO365Monitor:
             except ValueError:
                 return
 
-            # Check if this rule is allowed
+            # Filtra por rule_id permitido
             if rule_id not in self.allowed_event_types:
                 return
 
-            # Get OrganizationId
+            # Extrai OrganizationId
             org_id = data.get("data", {}).get("office365", {}).get("OrganizationId")
             if not org_id:
                 return
 
-            # Add detection_rule_id and source
+            # Filtra OrganizationId, a menos que seja wildcard
+            if not self.collect_all_orgs and org_id not in self.org_ids:
+                return
+
+            # Prepara payload
             payload = data
             payload["detection_rule_id"] = rule_id
             payload["source"] = self.source_name
