@@ -14,17 +14,15 @@ from utils.tenant_router import resolve_tenant
 class WazuhFileMonitor:
     """
     Monitors the Wazuh alerts.json file using tail -f logic.
-    Filters events by configured rule.id values (and optionally by agent_ids),
-    then sends matching alerts to Inopli, appending detection_rule_id to the payload.
+    Supports wildcard filtering on agent_ids.
     """
 
     def __init__(self, source_name, file_path, allowed_event_types, agent_ids=None):
-        self.source_name = source_name
-        self.file_path = file_path
+        self.source_name         = source_name
+        self.file_path           = file_path
         self.allowed_event_types = allowed_event_types
-        # se "*" estiver na lista, coleta todos os agentes sem filtro
-        self.agent_ids = agent_ids or []
-        self.collect_all = "*" in self.agent_ids
+        self.agent_ids           = agent_ids or []
+        self.collect_all         = "*" in self.agent_ids
 
         if DEBUG_MODE:
             print(f"[DEBUG] Initializing {self.__class__.__name__} "
@@ -33,21 +31,33 @@ class WazuhFileMonitor:
 
     def run(self):
         """
-        Executes a continuous tail -f loop on the alerts.json file.
+        Tails the alerts.json file, assembles possibly multi-line JSON records
+        and processes each complete JSON object as one event.
         """
         try:
             if not os.path.exists(self.file_path):
                 raise FileNotFoundError(f"File not found: {self.file_path}")
 
-            with open(self.file_path, "r") as file:
-                file.seek(0, os.SEEK_END)  # Move to EOF to simulate tail -f
-
+            with open(self.file_path, "r") as f:
+                f.seek(0, os.SEEK_END)
+                buffer = ""
                 while True:
-                    line = file.readline()
-                    if not line:
+                    chunk = f.readline()
+                    if not chunk:
                         time.sleep(0.5)
                         continue
-                    self._analyze_line(line)
+
+                    buffer += chunk
+                    try:
+                        # Try to parse a full JSON object from the buffer
+                        event = json.loads(buffer)
+                    except json.JSONDecodeError:
+                        # Incomplete JSON: read another line
+                        continue
+
+                    # Successfully parsed one event
+                    buffer = ""
+                    self._handle_event(event)
 
         except Exception as e:
             log_event(
@@ -62,44 +72,40 @@ class WazuhFileMonitor:
             if DEBUG_MODE:
                 print(f"[ERROR] {self.__class__.__name__}.run(): {e}")
 
-    def _analyze_line(self, line):
+    def _handle_event(self, event):
         """
-        Processes a single JSON line from alerts.json:
-        - Optionally filters by agent_id (unless collect_all is True)
-        - Extracts rule.id and converts it to int
-        - Checks if it is in the list of allowed_event_types
-        - Adds detection_rule_id to the payload
-        - Resolves the tenant and sends the alert to Inopli
+        Applies filtering and, if matched, sends the event to Inopli.
         """
         try:
-            data = json.loads(line)
-
-            # --- FILTRO DE AGENT_ID (wildcard support) ---
-            agent_id = data.get("agent", {}).get("id")
+            # --- agent_id filter with wildcard support ---
+            agent = event.get("agent", {}) or {}
+            agent_id = agent.get("id")
             if not self.collect_all and agent_id not in self.agent_ids:
                 return
-            # ----------------------------------------------
 
-            rule_obj = data.get("rule", {})
+            # Extract and validate rule ID
+            rule_obj    = event.get("rule", {})
             rule_id_str = rule_obj.get("id")
             if not rule_id_str:
                 return
-
             try:
                 rule_id = int(rule_id_str)
             except ValueError:
                 return
 
+            # Filter by allowed_event_types
             if rule_id not in self.allowed_event_types:
                 return
 
-            payload = data
+            # Prepare payload
+            payload = event
             payload["detection_rule_id"] = rule_id
-            payload["source"] = self.source_name  # Ensure correct source is set
+            payload["source"]            = self.source_name
 
             if DEBUG_MODE:
                 print(f"[DEBUG] WazuhFileMonitor payload: {payload}")
 
+            # Resolve tenant and send
             tenant_id, token = resolve_tenant(payload, self.source_name, rule_id)
             if not token:
                 if DEBUG_MODE:
@@ -116,9 +122,9 @@ class WazuhFileMonitor:
                 solution_name="inopli_monitor",
                 data_source=self.source_name,
                 class_name=self.__class__.__name__,
-                method="_analyze_line",
+                method="_handle_event",
                 event_type="error",
                 description=str(e)
             )
             if DEBUG_MODE:
-                print(f"[ERROR] {self.__class__.__name__}._analyze_line(): {e}")
+                print(f"[ERROR] {self.__class__.__name__}._handle_event(): {e}")

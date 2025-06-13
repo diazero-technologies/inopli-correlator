@@ -1,40 +1,43 @@
+# utils/tenant_router.py
+
 from utils.config_loader import load_multi_tenant_config
 
-# Load tenants config from unified sources_config.yaml
+# Carrega configuração de tenants (cacheada na importação)
 TENANTS_CONFIG = load_multi_tenant_config(path="config/sources_config.yaml")
 
 
 def resolve_tenant(event_payload, source_name, rule_id):
     """
-    Determine which tenant (if any) should receive this event based on:
-    - source_name: name of the data source
-    - rule_id: the detection rule ID
-    - event_payload: the alert payload, including any filter fields
+    Determina qual tenant (se algum) deve receber este evento baseado em:
+    - source_name: nome da data source
+    - rule_id: ID da regra de detecção
+    - event_payload: payload completo do alerta, incluindo campos para filtros
 
-    Returns a tuple (tenant_id, token) if matched, else (None, None).
+    Retorna tupla (tenant_id, token) se houver correspondência, senão (None, None).
     """
     for tenant_id, tenant_data in TENANTS_CONFIG.items():
         ds_list = tenant_data.get("data_sources", []) or []
 
-        # Find matching data source config for this tenant
+        # Encontra a fonte configurada e habilitada neste tenant
         ds_conf = next(
-            (d for d in ds_list if d.get("name") == source_name and d.get("enabled", False)),
+            (d for d in ds_list
+             if d.get("name") == source_name and d.get("enabled", False)),
             None
         )
         if not ds_conf:
             continue
 
-        # Check if this rule is allowed
+        # Verifica se a regra está permitida
         allowed_rules = ds_conf.get("event_types", []) or []
         if rule_id not in allowed_rules:
             continue
 
-        # Apply filters
+        # Aplica filtros configurados
         filters = ds_conf.get("filters") or {}
         if not _filters_match(event_payload, source_name, filters):
             continue
 
-        # Return tenant match
+        # Encontrou tenant válido
         token = tenant_data.get("token")
         return tenant_id, token
 
@@ -43,34 +46,44 @@ def resolve_tenant(event_payload, source_name, rule_id):
 
 def _filters_match(event_payload, source_name, filters):
     """
-    Evaluate filter conditions for a given data source against the payload.
-    Returns True if all filters match, False otherwise.
+    Avalia filtros definidos para uma dada data source contra o payload.
+    Retorna True se todos os filtros coincidirem, False caso contrário.
+    Wildcard '*' em qualquer lista de valores faz o filtro passar automaticamente.
     """
     for key, values in filters.items():
+        # Garante que values é uma lista
+        if not isinstance(values, (list, tuple, set)):
+            continue
+
+        # Filtro de agent_ids para wazuh_alerts
         if source_name == "wazuh_alerts" and key == "agent_ids":
-            agent = event_payload.get("agent", {})
-            agent_id = agent.get("id") if isinstance(agent, dict) else None
-            if agent_id not in values:
+            agent = event_payload.get("agent", {}) or {}
+            agent_id = agent.get("id")
+            if "*" not in values and agent_id not in values:
                 return False
 
+        # Filtro de hostname para fontes linux*
         elif source_name.startswith("linux") and key == "hostname":
             hostname = event_payload.get("hostname")
-            if hostname not in values:
+            if "*" not in values and hostname not in values:
                 return False
 
+        # Filtro de sensor_ids para crowdstrike
         elif source_name == "crowdstrike" and key == "sensor_ids":
             sensor_id = event_payload.get("sensor_id")
-            if sensor_id not in values:
+            if "*" not in values and sensor_id not in values:
                 return False
 
+        # Filtro de organization_ids para Office365
         elif key == "organization_ids":
             org_id = (
                 event_payload.get("data", {})
                 .get("office365", {})
                 .get("OrganizationId")
             )
-            if org_id not in values:
+            if "*" not in values and org_id not in values:
                 return False
 
-        # Unknown filter key: skip
+        # Se for um filtro desconhecido, simplesmente ignora
+
     return True
