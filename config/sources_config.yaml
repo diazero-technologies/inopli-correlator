@@ -19,11 +19,11 @@ tenants:
 
       - name: "wazuh_alerts"
         path: "/var/ossec/logs/alerts/alerts.json"
-        enabled: false
+        enabled: true
         module: "wazuh_file"
-        event_types: [100001, 100002, 100003]  # IDs que devem ser permitidos
+        event_types: [100001, 100002, 81633]  # IDs que devem ser permitidos
         filters:
-          agent_ids: ["001", "002"]
+          agent_ids: ["*"]
 
       - name: "crowdstrike"
         path: "/var/log/crowdstrike/events.log"
