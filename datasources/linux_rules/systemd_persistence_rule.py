@@ -22,71 +22,167 @@ class SystemdPersistenceRule(FileSystemEventHandler):
         super().__init__()
         self.source_name = source_name
         self.allowed_event_types = allowed_event_types
+        self.observer = None
+        self.active_observers = set()  # Track which paths are being watched
 
         self.watch_paths = [
             "/etc/systemd/system/",
             "/usr/lib/systemd/system/",
             "/lib/systemd/system/"
         ]
-        self.observer = Observer()
 
     def start_observer(self):
+        """Start the file system observer with error handling and recovery"""
+        try:
+            if self.observer:
+                self.stop_observer()
+
+            self.observer = Observer()
+            self._schedule_watches()
+            self.observer.start()
+
+            if DEBUG_MODE:
+                print(f"[DEBUG] Started systemd persistence watcher for paths: {', '.join(self.active_observers)}")
+
+        except Exception as e:
+            log_event(
+                event_id=995,
+                solution_name="inopli_monitor",
+                data_source=self.source_name,
+                class_name=self.__class__.__name__,
+                method="start_observer",
+                event_type="error",
+                description=str(e)
+            )
+            if DEBUG_MODE:
+                print(f"[ERROR] Failed to start systemd persistence watcher: {e}")
+
+    def stop_observer(self):
+        """Safely stop the observer"""
+        try:
+            if self.observer:
+                self.observer.stop()
+                self.observer.join()
+                self.observer = None
+                self.active_observers.clear()
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"[ERROR] Error stopping observer: {e}")
+
+    def _schedule_watches(self):
+        """Schedule watches for all available paths"""
+        self.active_observers.clear()
+        
         for path in self.watch_paths:
-            if os.path.isdir(path):
+            try:
+                if os.path.isdir(path):
+                    self.observer.schedule(self, path=path, recursive=False)
+                    self.active_observers.add(path)
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] Successfully watching path: {path}")
+            except Exception as e:
+                log_event(
+                    event_id=996,
+                    solution_name="inopli_monitor",
+                    data_source=self.source_name,
+                    class_name=self.__class__.__name__,
+                    method="_schedule_watches",
+                    event_type="error",
+                    description=f"Failed to watch {path}: {str(e)}"
+                )
                 if DEBUG_MODE:
-                    print(f"[DEBUG] Watching path: {path}")
-                self.observer.schedule(self, path=path, recursive=False)
-        self.observer.start()
+                    print(f"[ERROR] Failed to watch path {path}: {e}")
+
+        if not self.active_observers:
+            log_event(
+                event_id=997,
+                solution_name="inopli_monitor",
+                data_source=self.source_name,
+                class_name=self.__class__.__name__,
+                method="_schedule_watches",
+                event_type="warning",
+                description="No systemd paths available for watching"
+            )
 
     def _trigger_alert(self, path, operation):
-        # Check if rule is allowed for this monitor
-        if self.ID not in self.allowed_event_types:
-            return
+        """Send alert with error handling"""
+        try:
+            # Check if rule is allowed for this monitor
+            if self.ID not in self.allowed_event_types:
+                return
 
-        timestamp = datetime.utcnow().isoformat()
-        log_line = f"{operation.upper()} event on {path}"
+            timestamp = datetime.utcnow().isoformat()
+            log_line = f"{operation.upper()} event on {path}"
 
-        payload = {
-            "detection_rule_id": self.ID,
-            "source": self.source_name,
-            "rule": self.__class__.__name__,
-            "event_type": self.TYPE,
-            "severity": self.SEVERITY,
-            "timestamp": timestamp,
-            "target_file": path,
-            "raw_event": log_line,
-            "message": f"Systemd persistence file {operation}: {os.path.basename(path)}"
-        }
+            payload = {
+                "detection_rule_id": self.ID,
+                "source": self.source_name,
+                "rule": self.__class__.__name__,
+                "event_type": self.TYPE,
+                "severity": self.SEVERITY,
+                "timestamp": timestamp,
+                "target_file": path,
+                "raw_event": log_line,
+                "message": f"Systemd persistence file {operation}: {os.path.basename(path)}"
+            }
 
-        # Attach hostname for tenant filtering if available
-        if hasattr(self, 'hostname'):
-            payload['hostname'] = self.hostname
+            # Attach hostname for tenant filtering if available
+            if hasattr(self, 'hostname'):
+                payload['hostname'] = self.hostname
 
-        # Resolve tenant and token
-        tenant_id, token = self.resolve_tenant(payload, self.source_name, self.ID)
-        if not token:
+            # Resolve tenant and token
+            tenant_id, token = self.resolve_tenant(payload, self.source_name, self.ID)
+            if not token:
+                if DEBUG_MODE:
+                    print(f"[DEBUG] No tenant matched for payload: {payload}")
+                return
+
             if DEBUG_MODE:
-                print(f"[DEBUG] No tenant matched for payload: {payload}")
-            return
+                print(f"[ALERT] Sending systemd persistence alert to tenant {tenant_id}: {payload}")
+            send_to_inopli(payload, token_override=token)
 
-        if DEBUG_MODE:
-            print(f"[ALERT] Sending systemd persistence alert to tenant {tenant_id}: {payload}")
-        send_to_inopli(payload, token_override=token)
+        except Exception as e:
+            log_event(
+                event_id=999,
+                solution_name="inopli_monitor",
+                data_source=self.source_name,
+                class_name=self.__class__.__name__,
+                method="_trigger_alert",
+                event_type="error",
+                description=str(e)
+            )
+            if DEBUG_MODE:
+                print(f"[ERROR] Failed to trigger alert: {e}")
 
     def on_created(self, event):
-        if not event.is_directory and event.src_path.endswith(".service"):
+        """Handle file creation with error handling"""
+        try:
+            if not event.is_directory and event.src_path.endswith(".service"):
+                if DEBUG_MODE:
+                    print(f"[DEBUG] .service file created: {event.src_path}")
+                self._trigger_alert(event.src_path, "created")
+        except Exception as e:
             if DEBUG_MODE:
-                print(f"[DEBUG] .service file created: {event.src_path}")
-            self._trigger_alert(event.src_path, "created")
+                print(f"[ERROR] Error handling file creation: {e}")
 
     def on_modified(self, event):
-        if not event.is_directory and event.src_path.endswith(".service"):
+        """Handle file modification with error handling"""
+        try:
+            if not event.is_directory and event.src_path.endswith(".service"):
+                if DEBUG_MODE:
+                    print(f"[DEBUG] .service file modified: {event.src_path}")
+                self._trigger_alert(event.src_path, "modified")
+        except Exception as e:
             if DEBUG_MODE:
-                print(f"[DEBUG] .service file modified: {event.src_path}")
-            self._trigger_alert(event.src_path, "modified")
+                print(f"[ERROR] Error handling file modification: {e}")
 
     def on_deleted(self, event):
-        if not event.is_directory and event.src_path.endswith(".service"):
+        """Handle file deletion with error handling"""
+        try:
+            if not event.is_directory and event.src_path.endswith(".service"):
+                if DEBUG_MODE:
+                    print(f"[DEBUG] .service file deleted: {event.src_path}")
+                self._trigger_alert(event.src_path, "deleted")
+        except Exception as e:
             if DEBUG_MODE:
-                print(f"[DEBUG] .service file deleted: {event.src_path}")
-            self._trigger_alert(event.src_path, "deleted")
+                print(f"[ERROR] Error handling file deletion: {e}")

@@ -1,9 +1,57 @@
 import os
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
+import logging
 
-LOG_FILE_PATH = "/var/log/inopli_monitor.log"
+# Default values
+DEFAULT_LOG_PATH = "/var/log/inopli_monitor.log"
 DEFAULT_SOLUTION_NAME = "inopli_monitor"
+MAX_LOG_SIZE = 10 * 1024 * 1024  # 10MB
+BACKUP_COUNT = 5
 
+# Initialize logger
+logger = logging.getLogger('inopli_monitor')
+logger.setLevel(logging.INFO)
+
+def setup_logging(log_path=None):
+    """
+    Setup logging with rotation support.
+    Can be called multiple times to update the log path.
+    """
+    global logger
+    
+    # Remove any existing handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    
+    # Use provided path or default
+    log_file = log_path or os.environ.get('INOPLI_LOG_PATH', DEFAULT_LOG_PATH)
+    
+    try:
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        
+        # Setup rotating file handler
+        handler = RotatingFileHandler(
+            log_file,
+            maxBytes=MAX_LOG_SIZE,
+            backupCount=BACKUP_COUNT,
+            encoding='utf-8'
+        )
+        
+        # Don't use logging's formatting - we'll format our own messages
+        handler.setFormatter(logging.Formatter('%(message)s'))
+        logger.addHandler(handler)
+        
+    except Exception as e:
+        # Fallback to console logging if file logging fails
+        console = logging.StreamHandler()
+        console.setFormatter(logging.Formatter('[LOGGING ERROR] %(message)s'))
+        logger.addHandler(console)
+        logger.error(f"Failed to setup file logging: {e}")
+
+# Initialize with default path
+setup_logging()
 
 def log_event(event_id, solution_name=None, data_source=None, class_name=None,
               method=None, event_type=None, description=None, tenant_id=None):
@@ -24,13 +72,11 @@ def log_event(event_id, solution_name=None, data_source=None, class_name=None,
         desc = description or ""
 
         log_line = (
-            f"{timestamp}|{tid}|{event_id}|{sol}|{ds}|{cn}|{mth}|{etype}|{desc}\n"
+            f"{timestamp}|{tid}|{event_id}|{sol}|{ds}|{cn}|{mth}|{etype}|{desc}"
         )
-
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(LOG_FILE_PATH), exist_ok=True)
-        with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
-            f.write(log_line)
+        
+        logger.info(log_line)
+        
     except Exception as e:
         # Fallback to console if logging fails
         print(f"[LOGGING ERROR] {e} — Attempted log: {timestamp}|{tenant_id}|{event_id}|{solution_name}|{data_source}|{class_name}|{method}|{event_type}|{description}")

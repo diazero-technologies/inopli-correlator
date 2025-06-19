@@ -4,14 +4,115 @@ import os
 import time
 import importlib
 import socket
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
 from utils.event_logger import log_event
 from config.debug import DEBUG_MODE
 from utils.tenant_router import resolve_tenant
 
+
+class LinuxLogHandler(FileSystemEventHandler):
+    """
+    Watchdog handler for monitoring Linux log files.
+    """
+
+    def __init__(self, monitor):
+        self.monitor = monitor
+        self.file = None
+        self.position = 0
+        self._open_file()
+
+    def _open_file(self):
+        """Safely open the file and seek to the end"""
+        try:
+            if self.file:
+                self.file.close()
+            self.file = open(self.monitor.file_path, "r")
+            self.file.seek(0, os.SEEK_END)
+            self.position = self.file.tell()
+        except Exception as e:
+            log_event(
+                event_id=995,
+                solution_name="inopli_monitor",
+                data_source=self.monitor.source_name,
+                class_name="LinuxLogHandler",
+                method="_open_file",
+                event_type="error",
+                description=str(e)
+            )
+
+    def on_modified(self, event):
+        """Handle file modification events"""
+        if event.src_path != self.monitor.file_path:
+            return
+
+        try:
+            if not self.file or self.file.closed:
+                self._open_file()
+                return
+
+            self.file.seek(self.position)
+
+            while True:
+                line = self.file.readline()
+                if not line:
+                    break
+
+                if DEBUG_MODE:
+                    print(f"[DEBUG] Read line: {line.strip()}")
+
+                for rule in self.monitor.rules:
+                    if hasattr(rule, "analyze_line"):
+                        try:
+                            if DEBUG_MODE:
+                                print(f"[DEBUG] Passing line to rule: {rule.__class__.__name__}")
+                            rule.analyze_line(line)
+                        except Exception as rule_err:
+                            log_event(
+                                event_id=999,
+                                solution_name="inopli_monitor",
+                                data_source=self.monitor.source_name,
+                                class_name=rule.__class__.__name__,
+                                method="analyze_line",
+                                event_type="error",
+                                description=f"Exception in rule: {str(rule_err)}"
+                            )
+                            if DEBUG_MODE:
+                                print(f"[ERROR] Rule {rule.__class__.__name__} raised exception: {rule_err}")
+
+            self.position = self.file.tell()
+
+        except Exception as e:
+            self._open_file()  # Reopen file on any error
+            log_event(
+                event_id=995,
+                solution_name="inopli_monitor",
+                data_source=self.monitor.source_name,
+                class_name="LinuxLogHandler",
+                method="on_modified",
+                event_type="error",
+                description=str(e)
+            )
+
+    def on_deleted(self, event):
+        """Handle file deletion events"""
+        if event.src_path == self.monitor.file_path:
+            if self.file:
+                self.file.close()
+            self.file = None
+            self.position = 0
+
+    def on_created(self, event):
+        """Handle file creation events"""
+        if event.src_path == self.monitor.file_path:
+            self._open_file()
+
+
 class LinuxMonitor:
     """
     Main class for Linux log monitoring. Supports both line-based and filesystem watcher rules.
-    Integrates with multi-tenant logic via `resolve_tenant`.
+    Uses watchdog for reliable file monitoring and integrates with multi-tenant logic.
     """
 
     def __init__(self, source_name, file_path, allowed_event_types):
@@ -19,7 +120,7 @@ class LinuxMonitor:
         self.file_path = file_path
         self.allowed_event_types = allowed_event_types
         self.rules = []
-        self.offset = 0
+        self.observer = None
         self.observer_initialized = False
 
         # Host metadata for tenant filtering
@@ -83,8 +184,8 @@ class LinuxMonitor:
 
     def run(self):
         """
-        Continuously reads the file line-by-line and passes it to all loaded rules,
-        or starts filesystem observers for rules that require it.
+        Start monitoring the log file using watchdog observer and
+        initialize filesystem watchers for rules that require it.
         """
         try:
             if DEBUG_MODE:
@@ -99,40 +200,25 @@ class LinuxMonitor:
                         rule.start_observer()
                 self.observer_initialized = True
 
-            # Continue with line-based monitoring if file exists
-            if not os.path.exists(self.file_path):
-                raise FileNotFoundError(f"File not found: {self.file_path}")
+            # Set up file monitoring if directory exists
+            if not os.path.exists(os.path.dirname(self.file_path)):
+                raise FileNotFoundError(f"Directory not found: {os.path.dirname(self.file_path)}")
 
-            with open(self.file_path, "r") as file:
-                file.seek(0, os.SEEK_END)
+            event_handler = LinuxLogHandler(self)
+            self.observer = Observer()
+            self.observer.schedule(event_handler, os.path.dirname(self.file_path), recursive=False)
+            self.observer.start()
 
+            if DEBUG_MODE:
+                print(f"[INFO] Started watchdog observer for {self.file_path}")
+
+            try:
                 while True:
-                    line = file.readline()
-                    if not line:
-                        time.sleep(0.5)
-                        continue
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                self.observer.stop()
 
-                    if DEBUG_MODE:
-                        print(f"[DEBUG] Read line: {line.strip()}")
-
-                    for rule in self.rules:
-                        if hasattr(rule, "analyze_line"):
-                            try:
-                                if DEBUG_MODE:
-                                    print(f"[DEBUG] Passing line to rule: {rule.__class__.__name__}")
-                                rule.analyze_line(line)
-                            except Exception as rule_err:
-                                log_event(
-                                    event_id=999,
-                                    solution_name="inopli_monitor",
-                                    data_source=self.source_name,
-                                    class_name=rule.__class__.__name__,
-                                    method="analyze_line",
-                                    event_type="error",
-                                    description=f"Exception in rule: {str(rule_err)}"
-                                )
-                                if DEBUG_MODE:
-                                    print(f"[ERROR] Rule {rule.__class__.__name__} raised exception: {rule_err}")
+            self.observer.join()
 
         except Exception as e:
             log_event(
