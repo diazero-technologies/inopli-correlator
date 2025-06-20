@@ -4,7 +4,7 @@ import os
 import time
 import json
 from datetime import datetime
-from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver as Observer
 from watchdog.events import FileSystemEventHandler
 
 from utils.webhook_sender import send_to_inopli
@@ -44,28 +44,56 @@ class WazuhO365Handler(FileSystemEventHandler):
             )
 
     def on_modified(self, event):
-        """Handle file modification events"""
+        """Handle file modification events by reading and buffering all new content."""
         if event.src_path != self.monitor.file_path:
             return
+        
+        if DEBUG_MODE:
+            print(f"[DEBUG] O365 file modified: {event.src_path}. Reading new data.")
 
         try:
             if not self.file or self.file.closed:
+                if DEBUG_MODE:
+                    print("[DEBUG] File was closed. Reopening.")
                 self._open_file()
-                return
+                if not self.file:
+                    return
 
             self.file.seek(self.position)
-
-            while True:
-                line = self.file.readline()
-                if not line:
-                    break
-
-                self.monitor._analyze_line(line)
-
+            new_content = self.file.read()
             self.position = self.file.tell()
 
+            if not hasattr(self, 'buffer'):
+                self.buffer = ""
+            
+            self.buffer += new_content
+
+            if not self.buffer.strip():
+                return
+
+            decoder = json.JSONDecoder()
+            events_processed = 0
+            while self.buffer:
+                try:
+                    event_data, end_index = decoder.raw_decode(self.buffer)
+                    
+                    self.monitor._handle_event(event_data)
+                    events_processed += 1
+                    
+                    self.buffer = self.buffer[end_index:].lstrip()
+
+                except json.JSONDecodeError:
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] Incomplete JSON in O365 buffer, waiting for more data. Buffer starts with: {self.buffer[:100]}...")
+                    break
+            
+            if events_processed > 0 and DEBUG_MODE:
+                print(f"[DEBUG] Processed {events_processed} new O365 event(s).")
+
         except Exception as e:
-            self._open_file()  # Reopen file on any error
+            if DEBUG_MODE:
+                print(f"[ERROR] Error in O365 on_modified: {e}. Reopening file.")
+            self._open_file()
             log_event(
                 event_id=995,
                 solution_name="inopli_monitor",
@@ -79,6 +107,8 @@ class WazuhO365Handler(FileSystemEventHandler):
     def on_deleted(self, event):
         """Handle file deletion events"""
         if event.src_path == self.monitor.file_path:
+            if DEBUG_MODE:
+                print(f"[DEBUG] O365 watched file deleted: {event.src_path}")
             if self.file:
                 self.file.close()
             self.file = None
@@ -87,25 +117,97 @@ class WazuhO365Handler(FileSystemEventHandler):
     def on_created(self, event):
         """Handle file creation events"""
         if event.src_path == self.monitor.file_path:
+            if DEBUG_MODE:
+                print(f"[DEBUG] O365 watched file created: {event.src_path}")
             self._open_file()
+
+    def on_moved(self, event):
+        """Handle file move events (log rotation)"""
+        if event.src_path == self.monitor.file_path:
+            if DEBUG_MODE:
+                print(f"[DEBUG] O365 watched file moved from {event.src_path} to {event.dest_path}")
+            if self.file:
+                self.file.close()
+            self.file = None
+            self.position = 0
+        
+        elif event.dest_path == self.monitor.file_path:
+            if DEBUG_MODE:
+                print(f"[DEBUG] New O365 file moved into place at {event.dest_path}")
+            self._open_file()
+
+    def _handle_event(self, data):
+        try:
+            # Must be an Office 365 integration alert
+            if data.get("data", {}).get("integration") != "office365":
+                return
+
+            # Extract rule.id and convert to int
+            rule_obj = data.get("rule", {})
+            rule_id_str = rule_obj.get("id")
+            if not rule_id_str:
+                return
+
+            try:
+                rule_id = int(rule_id_str)
+            except ValueError:
+                return
+
+            # Get OrganizationId
+            org_id = data.get("data", {}).get("office365", {}).get("OrganizationId")
+            if not org_id:
+                return
+
+            # Add detection_rule_id and source
+            payload = data
+            payload["detection_rule_id"] = rule_id
+            payload["source"] = self.monitor.source_name
+
+            if DEBUG_MODE:
+                print(f"[DEBUG] WazuhO365Monitor payload: {payload}")
+
+            tenant_id, token = resolve_tenant(payload, self.monitor.source_name, rule_id)
+            if not token:
+                if DEBUG_MODE:
+                    print(f"[DEBUG] No tenant matched for OrganizationId={org_id}")
+                return
+
+            if DEBUG_MODE:
+                print(f"[ALERT] Sending Office 365 alert to tenant {tenant_id}")
+            send_to_inopli(payload, token_override=token)
+
+        except Exception as e:
+            log_event(
+                event_id=999,
+                solution_name="inopli_monitor",
+                data_source=self.monitor.source_name,
+                class_name=self.__class__.__name__,
+                method="_handle_event",
+                event_type="error",
+                description=str(e)
+            )
+            if DEBUG_MODE:
+                print(f"[ERROR] {self.__class__.__name__}._handle_event(): {e}")
 
 
 class WazuhO365Monitor:
     """
     Monitors Wazuh alerts.json for Office 365-related alerts using watchdog.
-    Filters by rule.id and OrganizationId, and sends matched alerts to Inopli
-    with detection_rule_id included.
+    Filters by rule.id (with wildcard support) and OrganizationId, and
+    sends matched alerts to Inopli with detection_rule_id included.
     """
 
     def __init__(self, source_name, file_path, allowed_event_types):
         self.source_name = source_name
         self.file_path = file_path
         self.allowed_event_types = allowed_event_types
+        self.collect_all_events = "*" in self.allowed_event_types
         self.observer = None
 
         if DEBUG_MODE:
             print(f"[DEBUG] Initializing {self.__class__.__name__} "
-                  f"for source '{source_name}' at path '{file_path}'")
+                  f"for source '{source_name}' at path '{file_path}' "
+                  f"with event_types={self.allowed_event_types!r}")
 
     def run(self):
         try:
@@ -141,14 +243,8 @@ class WazuhO365Monitor:
             if DEBUG_MODE:
                 print(f"[ERROR] {self.__class__.__name__}.run(): {e}")
 
-    def _analyze_line(self, line):
+    def _handle_event(self, data):
         try:
-            line = line.strip()
-            if not line:
-                return
-
-            data = json.loads(line)
-
             # Must be an Office 365 integration alert
             if data.get("data", {}).get("integration") != "office365":
                 return
@@ -164,8 +260,8 @@ class WazuhO365Monitor:
             except ValueError:
                 return
 
-            # Check if this rule is allowed
-            if rule_id not in self.allowed_event_types:
+            # Check if this rule is allowed (with wildcard support)
+            if not self.collect_all_events and rule_id not in self.allowed_event_types:
                 return
 
             # Get OrganizationId
@@ -197,9 +293,9 @@ class WazuhO365Monitor:
                 solution_name="inopli_monitor",
                 data_source=self.source_name,
                 class_name=self.__class__.__name__,
-                method="_analyze_line",
+                method="_handle_event",
                 event_type="error",
                 description=str(e)
             )
             if DEBUG_MODE:
-                print(f"[ERROR] {self.__class__.__name__}._analyze_line(): {e}")
+                print(f"[ERROR] {self.__class__.__name__}._handle_event(): {e}")

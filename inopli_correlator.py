@@ -4,6 +4,7 @@ import threading
 import importlib
 
 from utils.config_loader import load_multi_tenant_config
+from config.debug import DEBUG_MODE
 
 # Path para o arquivo unificado de configuração multi-tenant
 CONFIG_PATH = "config/sources_config.yaml"
@@ -11,6 +12,25 @@ CONFIG_PATH = "config/sources_config.yaml"
 # Carrega configuração de tenants
 tenants = load_multi_tenant_config(path=CONFIG_PATH)
 print(f"[INFO] Loaded tenants: {list(tenants.keys())} from {CONFIG_PATH}")
+
+
+def _merge_with_wildcard(existing_values, new_values):
+    """
+    Merge two lists of values, handling wildcards.
+    If either list contains '*', returns ['*'].
+    Otherwise, returns the union of both lists.
+    """
+    if not isinstance(existing_values, (list, set)):
+        existing_values = list(existing_values) if existing_values else []
+    if not isinstance(new_values, (list, set)):
+        new_values = list(new_values) if new_values else []
+    
+    # If either has wildcard, result is wildcard
+    if '*' in existing_values or '*' in new_values:
+        return ['*']
+    
+    # Otherwise, merge unique values
+    return list(set(existing_values) | set(new_values))
 
 
 def load_monitor(source):
@@ -35,7 +55,10 @@ def load_monitor(source):
             init_kwargs[filter_key] = filter_val
 
         inst = monitor_cls(**init_kwargs)
-        print(f"[DEBUG] Instantiated monitor for '{source['name']}'")
+        if DEBUG_MODE:
+            print(f"[DEBUG] Instantiated monitor for '{source['name']}' "
+                  f"with event_types={source.get('event_types')} "
+                  f"and filters={source.get('filters')}")
         return inst
 
     except Exception as e:
@@ -70,32 +93,41 @@ def main():
                 continue
 
             if src_name not in aggregated:
-                # inicia com event_types e filtros (como sets)
+                # inicia com event_types e filtros
                 aggregated[src_name] = {
                     "name": src_name,
                     "path": ds_conf.get("path"),
                     "module": ds_conf.get("module", src_name),
-                    "event_types": set(ds_conf.get("event_types", [])),
-                    "filters": {k: set(v) for k, v in ds_conf.get("filters", {}).items()}
+                    "event_types": ds_conf.get("event_types", []),
+                    "filters": {k: v for k, v in ds_conf.get("filters", {}).items()}
                 }
             else:
-                aggregated[src_name]["event_types"].update(ds_conf.get("event_types", []))
-                # mescla filtros de forma genérica
+                # Merge event_types with wildcard support
+                aggregated[src_name]["event_types"] = _merge_with_wildcard(
+                    aggregated[src_name]["event_types"],
+                    ds_conf.get("event_types", [])
+                )
+                
+                # Merge filters with wildcard support
                 for k, v in ds_conf.get("filters", {}).items():
                     if k not in aggregated[src_name]["filters"]:
-                        aggregated[src_name]["filters"][k] = set(v)
+                        aggregated[src_name]["filters"][k] = v
                     else:
-                        aggregated[src_name]["filters"][k].update(v)
+                        aggregated[src_name]["filters"][k] = _merge_with_wildcard(
+                            aggregated[src_name]["filters"][k],
+                            v
+                        )
 
     if not aggregated:
         print("[ERROR] No enabled data sources found across tenants. Exiting.")
         return
 
-    # 2) Converte sets de volta para listas
-    for src in aggregated.values():
-        src["event_types"] = list(src["event_types"])
-        for k, v in src.get("filters", {}).items():
-            src["filters"][k] = list(v)
+    if DEBUG_MODE:
+        print("[DEBUG] Aggregated configuration:")
+        for src_name, config in aggregated.items():
+            print(f"  {src_name}:")
+            print(f"    event_types: {config['event_types']}")
+            print(f"    filters: {config['filters']}")
 
     print(f"[INFO] Aggregated data sources: {list(aggregated.keys())}")
 

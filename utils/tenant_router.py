@@ -74,9 +74,9 @@ class TenantRouter:
             if not ds_conf:
                 continue
 
-            # Check if this rule is allowed
+            # Check if this rule is allowed (with wildcard support)
             allowed_rules = ds_conf.get("event_types", []) or []
-            if rule_id not in allowed_rules:
+            if "*" not in allowed_rules and rule_id not in allowed_rules:
                 continue
 
             # Apply filters
@@ -97,28 +97,44 @@ class TenantRouter:
         """
         for key, values in filters.items():
             if source_name == "wazuh_alerts" and key == "agent_ids":
+                # This tenant accepts all agent IDs
+                if "*" in values:
+                    continue
+
                 agent = event_payload.get("agent", {})
                 agent_id = agent.get("id") if isinstance(agent, dict) else None
                 if agent_id not in values:
                     return False
 
             elif source_name.startswith("linux") and key == "hostname":
+                # This tenant accepts all hostnames
+                if "*" in values:
+                    continue
+
                 hostname = event_payload.get("hostname")
                 if hostname not in values:
                     return False
 
             elif source_name == "crowdstrike" and key == "sensor_ids":
+                # This tenant accepts all sensor IDs
+                if "*" in values:
+                    continue
+
                 sensor_id = event_payload.get("sensor_id")
                 if sensor_id not in values:
                     return False
 
             elif key == "organization_ids":
+                # This tenant accepts all organization IDs
+                if "*" in values:
+                    continue
+
                 org_id = (
                     event_payload.get("data", {})
                     .get("office365", {})
                     .get("OrganizationId")
                 )
-                if org_id not in values:
+                if not org_id or org_id not in values:
                     return False
 
             # Unknown filter key: skip
