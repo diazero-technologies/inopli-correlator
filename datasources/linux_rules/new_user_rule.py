@@ -3,6 +3,7 @@ from datetime import datetime
 from utils.webhook_sender import send_to_inopli
 from utils.event_logger import log_event
 from config.debug import DEBUG_MODE
+from integrations.integration_manager import IntegrationManager
 
 class NewUserCreationRule:
     """
@@ -16,23 +17,20 @@ class NewUserCreationRule:
     def __init__(self, source_name, allowed_event_types):
         self.source_name = source_name
         self.allowed_event_types = allowed_event_types
+        self.integration_manager = IntegrationManager()
         # hostname and resolve_tenant will be injected by the monitor
 
     def analyze_line(self, line):
         try:
             if not self._matches_user_creation(line):
                 return
-
-            # Check if rule is allowed by monitor-level config
             if self.ID not in self.allowed_event_types:
                 if DEBUG_MODE:
                     print(f"[DEBUG] Rule {self.__class__.__name__} skipped due to config.")
                 return
-
             timestamp = datetime.utcnow().isoformat()
             username = self._extract_username(line)
             log_line = line.strip()
-
             payload = {
                 "detection_rule_id": self.ID,
                 "source": self.source_name,
@@ -44,22 +42,29 @@ class NewUserCreationRule:
                 "raw_event": log_line,
                 "message": f"New system user created: '{username}'"
             }
-
-            # Attach hostname for tenant filtering if available
             if hasattr(self, 'hostname'):
                 payload['hostname'] = self.hostname
-
-            # Determine tenant and token
             tenant_id, token = self.resolve_tenant(payload, self.source_name, self.ID)
             if not token:
                 if DEBUG_MODE:
                     print(f"[DEBUG] No tenant matched for payload: {payload}")
                 return
-
-            if DEBUG_MODE:
-                print(f"[ALERT] Sending NewUserCreation alert to tenant {tenant_id}")
-            send_to_inopli(payload, token_override=token)
-
+            alert_mode = self.integration_manager.alert_mode
+            if alert_mode == "all":
+                if DEBUG_MODE:
+                    print(f"[ALERT] Sending NewUserCreation alert to tenant {tenant_id} (pre-enrichment, alert_mode=all)")
+                send_to_inopli(payload, token_override=token)
+            if self.integration_manager.has_active_integrations():
+                alerts_to_send = self.integration_manager.process_alert(payload)
+                for alert in alerts_to_send:
+                    tenant_id, token = self.resolve_tenant(alert, self.source_name, self.ID)
+                    if not token:
+                        if DEBUG_MODE:
+                            print(f"[DEBUG] No tenant matched for payload: {alert}")
+                        continue
+                    if DEBUG_MODE:
+                        print(f"[ALERT] Sending enriched NewUserCreation alert to tenant {tenant_id}")
+                    send_to_inopli(alert, token_override=token)
         except Exception as e:
             log_event(
                 event_id=999,

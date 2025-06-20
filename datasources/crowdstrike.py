@@ -8,6 +8,7 @@ from utils.webhook_sender import send_to_inopli
 from utils.event_logger import log_event
 from config.debug import DEBUG_MODE
 from utils.tenant_router import resolve_tenant
+from integrations.integration_manager import IntegrationManager
 
 class CrowdstrikeMonitor:
     DETECTION_MAP = {
@@ -27,6 +28,7 @@ class CrowdstrikeMonitor:
         self.source_name = source_name
         self.file_path = file_path
         self.allowed_event_types = allowed_event_types
+        self.integration_manager = IntegrationManager()
 
         if DEBUG_MODE:
             print(f"[DEBUG] Initializing CrowdstrikeMonitor for {source_name} at {file_path}")
@@ -104,10 +106,22 @@ class CrowdstrikeMonitor:
                     print(f"[DEBUG] No tenant matched for payload: {payload}")
                 return
 
-            if DEBUG_MODE:
-                print(f"[ALERT] Sending Crowdstrike alert to tenant {tenant_id}")
-            # Send with tenant-specific token
-            send_to_inopli(payload, token_override=token)
+            alert_mode = self.integration_manager.alert_mode
+            if alert_mode == "all":
+                if DEBUG_MODE:
+                    print(f"[ALERT] Sending Crowdstrike alert to tenant {tenant_id} (pre-enrichment, alert_mode=all)")
+                send_to_inopli(payload, token_override=token)
+            if self.integration_manager.has_active_integrations():
+                alerts_to_send = self.integration_manager.process_alert(payload)
+                for alert in alerts_to_send:
+                    tenant_id, token = resolve_tenant(alert, self.source_name, rule_id)
+                    if not token:
+                        if DEBUG_MODE:
+                            print(f"[DEBUG] No tenant matched for payload: {alert}")
+                        continue
+                    if DEBUG_MODE:
+                        print(f"[ALERT] Sending enriched Crowdstrike alert to tenant {tenant_id}")
+                    send_to_inopli(alert, token_override=token)
 
         except Exception as e:
             log_event(

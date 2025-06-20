@@ -11,6 +11,7 @@ from utils.webhook_sender import send_to_inopli
 from utils.event_logger import log_event
 from config.debug import DEBUG_MODE
 from utils.tenant_router import resolve_tenant
+from integrations.integration_manager import IntegrationManager
 
 
 class WazuhO365Handler(FileSystemEventHandler):
@@ -203,7 +204,7 @@ class WazuhO365Monitor:
         self.allowed_event_types = allowed_event_types
         self.collect_all_events = "*" in self.allowed_event_types
         self.observer = None
-
+        self.integration_manager = IntegrationManager()
         if DEBUG_MODE:
             print(f"[DEBUG] Initializing {self.__class__.__name__} "
                   f"for source '{source_name}' at path '{file_path}' "
@@ -245,48 +246,47 @@ class WazuhO365Monitor:
 
     def _handle_event(self, data):
         try:
-            # Must be an Office 365 integration alert
             if data.get("data", {}).get("integration") != "office365":
                 return
-
-            # Extract rule.id and convert to int
             rule_obj = data.get("rule", {})
             rule_id_str = rule_obj.get("id")
             if not rule_id_str:
                 return
-
             try:
                 rule_id = int(rule_id_str)
             except ValueError:
                 return
-
-            # Check if this rule is allowed (with wildcard support)
             if not self.collect_all_events and rule_id not in self.allowed_event_types:
                 return
-
-            # Get OrganizationId
             org_id = data.get("data", {}).get("office365", {}).get("OrganizationId")
             if not org_id:
                 return
-
-            # Add detection_rule_id and source
             payload = data
             payload["detection_rule_id"] = rule_id
             payload["source"] = self.source_name
-
             if DEBUG_MODE:
                 print(f"[DEBUG] WazuhO365Monitor payload: {payload}")
-
             tenant_id, token = resolve_tenant(payload, self.source_name, rule_id)
             if not token:
                 if DEBUG_MODE:
                     print(f"[DEBUG] No tenant matched for OrganizationId={org_id}")
                 return
-
-            if DEBUG_MODE:
-                print(f"[ALERT] Sending Office 365 alert to tenant {tenant_id}")
-            send_to_inopli(payload, token_override=token)
-
+            alert_mode = self.integration_manager.alert_mode
+            if alert_mode == "all":
+                if DEBUG_MODE:
+                    print(f"[ALERT] Sending Office 365 alert to tenant {tenant_id} (pre-enrichment, alert_mode=all)")
+                send_to_inopli(payload, token_override=token)
+            if self.integration_manager.has_active_integrations():
+                alerts_to_send = self.integration_manager.process_alert(payload)
+                for alert in alerts_to_send:
+                    tenant_id, token = resolve_tenant(alert, self.source_name, rule_id)
+                    if not token:
+                        if DEBUG_MODE:
+                            print(f"[DEBUG] No tenant matched for payload: {alert}")
+                        continue
+                    if DEBUG_MODE:
+                        print(f"[ALERT] Sending enriched Office 365 alert to tenant {tenant_id}")
+                    send_to_inopli(alert, token_override=token)
         except Exception as e:
             log_event(
                 event_id=999,

@@ -5,6 +5,7 @@ from collections import defaultdict, deque
 from utils.webhook_sender import send_to_inopli
 from utils.event_logger import log_event
 from config.debug import DEBUG_MODE
+from integrations.integration_manager import IntegrationManager
 
 class BruteforceRule:
     ID = 1001
@@ -21,6 +22,7 @@ class BruteforceRule:
         self.raw_lines_by_ip = defaultdict(deque)
         self.raw_lines_by_user = defaultdict(deque)
         # hostname and resolve_tenant will be injected by LinuxMonitor
+        self.integration_manager = IntegrationManager()
 
     def analyze_line(self, line):
         try:
@@ -68,10 +70,8 @@ class BruteforceRule:
                 print(f"[ERROR] {e}")
 
     def _send_alert(self, ip, username, log_line, timestamp, related_events):
-        # Check if rule is allowed globally for this monitor
         if self.ID not in self.allowed_event_types:
             return
-        # Build payload
         payload = {
             "detection_rule_id": self.ID,
             "source": self.source_name,
@@ -85,20 +85,29 @@ class BruteforceRule:
             "related_events": related_events,
             "message": f"Bruteforce detected from IP {ip} targeting user {username}"
         }
-        # Include hostname for tenant filtering if available
         if hasattr(self, 'hostname'):
             payload['hostname'] = self.hostname
-
-        # Resolve tenant and token
         tenant_id, token = self.resolve_tenant(payload, self.source_name, self.ID)
         if not token:
             if DEBUG_MODE:
                 print(f"[DEBUG] No tenant matched for payload: {payload}")
             return
-
-        if DEBUG_MODE:
-            print(f"[ALERT] Sending payload to tenant {tenant_id} with token override")
-        send_to_inopli(payload, token_override=token)
+        alert_mode = self.integration_manager.alert_mode
+        if alert_mode == "all":
+            if DEBUG_MODE:
+                print(f"[ALERT] Sending payload to tenant {tenant_id} (pre-enrichment, alert_mode=all)")
+            send_to_inopli(payload, token_override=token)
+        if self.integration_manager.has_active_integrations():
+            alerts_to_send = self.integration_manager.process_alert(payload)
+            for alert in alerts_to_send:
+                tenant_id, token = self.resolve_tenant(alert, self.source_name, self.ID)
+                if not token:
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] No tenant matched for payload: {alert}")
+                    continue
+                if DEBUG_MODE:
+                    print(f"[ALERT] Sending enriched payload to tenant {tenant_id}")
+                send_to_inopli(alert, token_override=token)
 
     def _prune(self, times, lines, now):
         while times and (now - times[0]) > self.WINDOW_SECONDS:

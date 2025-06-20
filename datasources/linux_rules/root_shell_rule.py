@@ -3,6 +3,7 @@ from datetime import datetime
 from utils.webhook_sender import send_to_inopli
 from utils.event_logger import log_event
 from config.debug import DEBUG_MODE
+from integrations.integration_manager import IntegrationManager
 
 class RootShellExecutionRule:
     """
@@ -16,22 +17,19 @@ class RootShellExecutionRule:
     def __init__(self, source_name, allowed_event_types):
         self.source_name = source_name
         self.allowed_event_types = allowed_event_types
+        self.integration_manager = IntegrationManager()
         # hostname and resolve_tenant will be injected by the monitor
 
     def analyze_line(self, line):
         try:
             if not self._matches_root_shell_pattern(line):
                 return
-
-            # Ensure rule is enabled for this monitor
             if self.ID not in self.allowed_event_types:
                 return
-
             timestamp = datetime.utcnow().isoformat()
             user = self._extract_user(line)
             command = self._extract_command(line)
             log_line = line.strip()
-
             payload = {
                 "detection_rule_id": self.ID,
                 "source": self.source_name,
@@ -44,22 +42,29 @@ class RootShellExecutionRule:
                 "raw_event": log_line,
                 "message": f"Root shell execution detected: user '{user}' ran '{command}'"
             }
-
-            # Attach hostname for filtering
             if hasattr(self, 'hostname'):
                 payload['hostname'] = self.hostname
-
-            # Resolve tenant and token based on payload
             tenant_id, token = self.resolve_tenant(payload, self.source_name, self.ID)
             if not token:
                 if DEBUG_MODE:
                     print(f"[DEBUG] No tenant matched for payload: {payload}")
                 return
-
-            if DEBUG_MODE:
-                print(f"[ALERT] Sending root shell payload to tenant {tenant_id}")
-            send_to_inopli(payload, token_override=token)
-
+            alert_mode = self.integration_manager.alert_mode
+            if alert_mode == "all":
+                if DEBUG_MODE:
+                    print(f"[ALERT] Sending root shell payload to tenant {tenant_id} (pre-enrichment, alert_mode=all)")
+                send_to_inopli(payload, token_override=token)
+            if self.integration_manager.has_active_integrations():
+                alerts_to_send = self.integration_manager.process_alert(payload)
+                for alert in alerts_to_send:
+                    tenant_id, token = self.resolve_tenant(alert, self.source_name, self.ID)
+                    if not token:
+                        if DEBUG_MODE:
+                            print(f"[DEBUG] No tenant matched for payload: {alert}")
+                        continue
+                    if DEBUG_MODE:
+                        print(f"[ALERT] Sending enriched root shell payload to tenant {tenant_id}")
+                    send_to_inopli(alert, token_override=token)
         except Exception as e:
             log_event(
                 event_id=999,

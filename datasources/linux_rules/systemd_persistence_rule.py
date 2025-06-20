@@ -6,6 +6,7 @@ from watchdog.events import FileSystemEventHandler
 from utils.webhook_sender import send_to_inopli
 from utils.event_logger import log_event
 from config.debug import DEBUG_MODE
+from integrations.integration_manager import IntegrationManager
 
 class SystemdPersistenceRule(FileSystemEventHandler):
     """
@@ -24,6 +25,7 @@ class SystemdPersistenceRule(FileSystemEventHandler):
         self.allowed_event_types = allowed_event_types
         self.observer = None
         self.active_observers = set()  # Track which paths are being watched
+        self.integration_manager = IntegrationManager()
 
         self.watch_paths = [
             "/etc/systemd/system/",
@@ -105,15 +107,11 @@ class SystemdPersistenceRule(FileSystemEventHandler):
             )
 
     def _trigger_alert(self, path, operation):
-        """Send alert with error handling"""
         try:
-            # Check if rule is allowed for this monitor
             if self.ID not in self.allowed_event_types:
                 return
-
             timestamp = datetime.utcnow().isoformat()
             log_line = f"{operation.upper()} event on {path}"
-
             payload = {
                 "detection_rule_id": self.ID,
                 "source": self.source_name,
@@ -125,22 +123,29 @@ class SystemdPersistenceRule(FileSystemEventHandler):
                 "raw_event": log_line,
                 "message": f"Systemd persistence file {operation}: {os.path.basename(path)}"
             }
-
-            # Attach hostname for tenant filtering if available
             if hasattr(self, 'hostname'):
                 payload['hostname'] = self.hostname
-
-            # Resolve tenant and token
             tenant_id, token = self.resolve_tenant(payload, self.source_name, self.ID)
             if not token:
                 if DEBUG_MODE:
                     print(f"[DEBUG] No tenant matched for payload: {payload}")
                 return
-
-            if DEBUG_MODE:
-                print(f"[ALERT] Sending systemd persistence alert to tenant {tenant_id}: {payload}")
-            send_to_inopli(payload, token_override=token)
-
+            alert_mode = self.integration_manager.alert_mode
+            if alert_mode == "all":
+                if DEBUG_MODE:
+                    print(f"[ALERT] Sending systemd persistence alert to tenant {tenant_id} (pre-enrichment, alert_mode=all)")
+                send_to_inopli(payload, token_override=token)
+            if self.integration_manager.has_active_integrations():
+                alerts_to_send = self.integration_manager.process_alert(payload)
+                for alert in alerts_to_send:
+                    tenant_id, token = self.resolve_tenant(alert, self.source_name, self.ID)
+                    if not token:
+                        if DEBUG_MODE:
+                            print(f"[DEBUG] No tenant matched for payload: {alert}")
+                        continue
+                    if DEBUG_MODE:
+                        print(f"[ALERT] Sending enriched systemd persistence alert to tenant {tenant_id}: {alert}")
+                    send_to_inopli(alert, token_override=token)
         except Exception as e:
             log_event(
                 event_id=999,
