@@ -88,10 +88,18 @@ class WazuhFileHandler(FileSystemEventHandler):
                     self.buffer = self.buffer[end_index:].lstrip()
 
                 except json.JSONDecodeError:
-                    # This is expected if the file ends with a partial JSON object.
-                    # We break the loop and wait for the next file modification to get the rest.
                     if DEBUG_MODE:
                         print(f"[DEBUG] Incomplete JSON in buffer, waiting for more data. Buffer starts with: {self.buffer[:100]}...")
+                    # Realign buffer if it does not start with '{'
+                    first_brace = self.buffer.find('{')
+                    if first_brace > 0:
+                        if DEBUG_MODE:
+                            print(f"[DEBUG] Realigning buffer. Discarding {first_brace} bytes before next '{{'.")
+                        self.buffer = self.buffer[first_brace:]
+                    elif first_brace == -1:
+                        if DEBUG_MODE:
+                            print(f"[DEBUG] No '{{' found in buffer. Clearing buffer.")
+                        self.buffer = ""
                     break
             
             if events_processed > 0 and DEBUG_MODE:
@@ -120,6 +128,7 @@ class WazuhFileHandler(FileSystemEventHandler):
                 self.file.close()
             self.file = None
             self.position = 0
+            self.buffer = ""
 
     def on_created(self, event):
         """Handle file creation events"""
@@ -127,6 +136,7 @@ class WazuhFileHandler(FileSystemEventHandler):
             if DEBUG_MODE:
                 print(f"[DEBUG] Watched file created: {event.src_path}")
             self._open_file()
+            self.buffer = ""
 
     def on_moved(self, event):
         """Handle file move events (log rotation)"""
@@ -138,12 +148,14 @@ class WazuhFileHandler(FileSystemEventHandler):
                 self.file.close()
             self.file = None
             self.position = 0
+            self.buffer = ""
         
         # If a new file was moved into the place we are watching
         elif event.dest_path == self.monitor.file_path:
             if DEBUG_MODE:
                 print(f"[DEBUG] New file moved into place at {event.dest_path}")
             self._open_file()
+            self.buffer = ""
 
 
 class WazuhFileMonitor:
