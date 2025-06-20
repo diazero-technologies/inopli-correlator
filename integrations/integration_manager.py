@@ -77,35 +77,34 @@ class IntegrationManager:
 
         if self.alert_mode == "all":
             alerts_to_return.append(alert)
-            for enrichment in enrichment_results:
+            if enrichment_results:
                 enriched_alert = alert.copy()
-                enriched_alert["cti"] = enrichment
+                enriched_alert["cti"] = enrichment_results
                 alerts_to_return.append(enriched_alert)
             if DEBUG_MODE:
-                print(f"[DEBUG] process_alert (all): returning {len(alerts_to_return)} alerts (original + CTI)")
+                print(f"[DEBUG] process_alert (all): returning {len(alerts_to_return)} alerts (original + aggregated CTI)")
         elif self.alert_mode == "cti_only":
-            for enrichment in enrichment_results:
+            if enrichment_results:
                 enriched_alert = alert.copy()
-                enriched_alert["cti"] = enrichment
+                enriched_alert["cti"] = enrichment_results
                 alerts_to_return.append(enriched_alert)
             if DEBUG_MODE:
-                print(f"[DEBUG] process_alert (cti_only): returning {len(alerts_to_return)} CTI alerts")
+                print(f"[DEBUG] process_alert (cti_only): returning {len(alerts_to_return)} aggregated CTI alerts")
         elif self.alert_mode == "none":
             if DEBUG_MODE:
                 print(f"[DEBUG] process_alert (none): returning 0 alerts (test mode)")
                 if enrichment_results:
                     print(f"[DEBUG] Enriched alerts (test mode, not sent):")
-                    for enrichment in enrichment_results:
-                        enriched_alert = alert.copy()
-                        enriched_alert["cti"] = enrichment
-                        print(enriched_alert)
+                    enriched_alert = alert.copy()
+                    enriched_alert["cti"] = enrichment_results
+                    print(enriched_alert)
             # Do not return any alerts
         else:
             # Fallback to default
             alerts_to_return.append(alert)
-            for enrichment in enrichment_results:
+            if enrichment_results:
                 enriched_alert = alert.copy()
-                enriched_alert["cti"] = enrichment
+                enriched_alert["cti"] = enrichment_results
                 alerts_to_return.append(enriched_alert)
             if DEBUG_MODE:
                 print(f"[DEBUG] process_alert (fallback): returning {len(alerts_to_return)} alerts")

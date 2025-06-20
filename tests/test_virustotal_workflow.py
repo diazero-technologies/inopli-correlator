@@ -26,9 +26,16 @@ class DummyRule:
             self.send_alert(payload)
         if self.integration_manager.has_active_integrations():
             alerts_to_send = self.integration_manager.process_alert(payload)
+            enriched_alerts = [a for a in alerts_to_send if "cti" in a]
             for alert in alerts_to_send:
                 tenant_id, token = self.resolve_tenant(alert, self.source_name, self.ID)
                 self.send_alert(alert)
+            # Assert only one enriched alert and cti is a list
+            if enriched_alerts:
+                assert len(enriched_alerts) == 1
+                cti = enriched_alerts[0]["cti"]
+                assert isinstance(cti, list)
+                assert all(isinstance(e, dict) and "integration" in e and "field_type" in e for e in cti)
 
 class TestVirusTotalWorkflowHash(unittest.TestCase):
     @patch("utils.webhook_sender.send_to_inopli")
