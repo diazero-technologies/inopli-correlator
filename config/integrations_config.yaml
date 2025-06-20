@@ -12,6 +12,10 @@ integrations:
     api_key: "YOUR_XFORCE_API_KEY"
     api_password: "YOUR_XFORCE_API_PASSWORD"
     fields: ["ip", "domain", "url"]
+  hybrid_analysis:
+    enabled: false
+    api_key: "YOUR_HYBRID_ANALYSIS_API_KEY"
+    fields: ["file_hash", "ip", "url"]
 
 # Optionally, you can add per-tenant or per-source overrides in the future, e.g.:
 # tenants:
