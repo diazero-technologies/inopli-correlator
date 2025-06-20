@@ -1,0 +1,7 @@
+# Business rules for alert generation
+# alert_mode options:
+#   all      - Send all triggered alerts and all CTI alerts to the tenant (default)
+#   cti_only - Only send alerts if validated by CTI (enrichment must indicate a threat)
+#   none     - Do not send any alerts (test mode)
+
+alert_mode: all 

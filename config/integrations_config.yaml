@@ -1,0 +1,23 @@
+integrations:
+  virustotal:
+    enabled: false  # Set to true to activate
+    api_key: "YOUR_VIRUSTOTAL_API_KEY"
+    fields: ["ip", "domain", "file_hash"]
+  abuseipdb:
+    enabled: false
+    api_key: "YOUR_ABUSEIPDB_API_KEY"
+    fields: ["ip"]
+  ibm_xforce:
+    enabled: false
+    api_key: "YOUR_XFORCE_API_KEY"
+    api_password: "YOUR_XFORCE_API_PASSWORD"
+    fields: ["ip", "domain", "url"]
+
+# Optionally, you can add per-tenant or per-source overrides in the future, e.g.:
+# tenants:
+#   tenant1:
+#     integrations:
+#       virustotal:
+#         enabled: true
+#         api_key: "TENANT1_VT_KEY"
+#         fields: ["ip", "file_hash"] 
