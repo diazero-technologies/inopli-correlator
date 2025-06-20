@@ -2,10 +2,19 @@
 # Example: 'ip' can be 'src_ip', 'ip', 'source_ip', etc.
 
 FIELD_MAPPING = {
-    "ip": ["ip", "src_ip", "source_ip", "srcip", "client_ip", "remote_ip"],
-    "domain": ["domain", "fqdn", "hostname", "host", "url_domain"],
-    "file_hash": ["hash", "file_hash", "sha256", "sha1", "md5"],
-    "url": ["url", "uri", "link"],
+    "ip": [
+        "ip", "src_ip", "source_ip", "srcip", "client_ip", "remote_ip",
+        "data.srcip", "data.dstip"
+    ],
+    "domain": [
+        "domain", "fqdn", "hostname", "host", "url_domain"
+    ],
+    "file_hash": [
+        "hash", "file_hash", "sha256", "sha1", "md5"
+    ],
+    "url": [
+        "url", "uri", "link", "data.url"
+    ],
     # Add more mappings as needed
 }
 
