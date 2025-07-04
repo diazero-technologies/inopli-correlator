@@ -87,23 +87,37 @@ class MiddlewareManager:
     def create_connectors(self) -> bool:
         """
         Create SIEM connectors based on middleware configuration.
-        Creates one connector per SIEM type with aggregated tenant configurations.
+        Creates individual connectors for each SIEM source instance in each tenant.
         """
         try:
             # Stop existing connectors
             self.stop_connectors()
             
-            # Get connector configurations from middleware config
+            # Get global connector configurations
             connector_configs = self._get_connector_configs()
             
-            # Create connectors for each SIEM type
-            for siem_type, config in connector_configs.items():
-                if config.get("enabled", False):
-                    connector = self._create_connector(siem_type, config)
-                    if connector:
-                        self.connectors[siem_type] = connector
+            # Create connectors for each SIEM source instance in each tenant
+            for tenant_id, tenant_config in self.tenants_config.items():
+                siem_sources = tenant_config.get("siem_sources", {})
+                
+                for source_name, source_config in siem_sources.items():
+                    if not source_config.get("enabled", False):
+                        continue
+                    
+                    connector_type = source_config.get("connector_type", source_name.split("_")[0])
+                    
+                    # Check if this connector type is globally enabled
+                    if not connector_configs.get(connector_type, {}).get("enabled", True):
                         if DEBUG_MODE:
-                            print(f"[DEBUG] Created connector: {siem_type}")
+                            print(f"[DEBUG] Skipping {source_name} - {connector_type} globally disabled")
+                        continue
+                    
+                    # Create connector for this specific source instance
+                    connector = self._create_connector(source_name, source_config, tenant_id)
+                    if connector:
+                        self.connectors[source_name] = connector
+                        if DEBUG_MODE:
+                            print(f"[DEBUG] Created connector: {source_name} for tenant {tenant_id}")
             
             if DEBUG_MODE:
                 print(f"[DEBUG] Created {len(self.connectors)} connectors")
@@ -137,52 +151,57 @@ class MiddlewareManager:
                 print(f"[ERROR] Failed to load connector configs: {e}")
             return {}
     
-    def _create_connector(self, siem_type: str, config: Dict[str, Any]) -> SIEMConnector | None:
-        """Create a specific connector based on the SIEM type."""
+    def _create_connector(self, source_name: str, source_config: Dict[str, Any], tenant_id: str) -> SIEMConnector | None:
+        """Create a specific connector based on the source configuration."""
         try:
-            if siem_type == "wazuh":
-                # Create Wazuh connector with tenant configurations
-                connector_config = {
-                    "enabled": config.get("enabled", False),
-                    "file_monitoring": config.get("file_monitoring", True),
-                    "buffer_size": config.get("buffer_size", 8192),
-                    "tenants_config": self.tenants_config  # Pass tenant configurations
-                }
-                return WazuhConnector(siem_type, connector_config)
+            connector_type = source_config.get("connector_type", source_name.split("_")[0])
             
-            elif siem_type == "qradar":
-                # Create QRadar connector with tenant configurations
+            if connector_type == "wazuh":
+                # Create Wazuh connector with source-specific configuration
                 connector_config = {
-                    "enabled": config.get("enabled", False),
-                    "polling_interval": config.get("polling_interval", 5),
-                    "api_config": config.get("api_config", {}),
-                    "collection_control": config.get("collection_control", {}),
-                    "tenants_config": self.tenants_config  # Pass tenant configurations
+                    "enabled": source_config.get("enabled", False),
+                    "file_monitoring": source_config.get("file_monitoring", True),
+                    "buffer_size": source_config.get("buffer_size", 8192),
+                    "file_path": source_config.get("file_path", ""),
+                    "tenant_id": tenant_id,
+                    "tenant_config": self.tenants_config.get(tenant_id, {})
                 }
-                return QRadarConnector(siem_type, connector_config)
+                return WazuhConnector(source_name, connector_config)
+            
+            elif connector_type == "qradar":
+                # Create QRadar connector with source-specific configuration
+                connector_config = {
+                    "enabled": source_config.get("enabled", False),
+                    "polling_interval": source_config.get("polling_interval", 5),
+                    "api_config": source_config.get("api_config", {}),
+                    "collection_control": source_config.get("collection_control", {}),
+                    "tenant_id": tenant_id,
+                    "tenant_config": self.tenants_config.get(tenant_id, {})
+                }
+                return QRadarConnector(source_name, connector_config)
             
             # Add more connector types here as needed
-            # elif siem_type == "crowdstrike":
-            #     return CrowdStrikeConnector(siem_type, config)
-            # elif siem_type == "linux":
-            #     return LinuxConnector(siem_type, config)
+            # elif connector_type == "crowdstrike":
+            #     return CrowdStrikeConnector(source_name, connector_config)
+            # elif connector_type == "linux":
+            #     return LinuxConnector(source_name, connector_config)
             
             if DEBUG_MODE:
-                print(f"[DEBUG] No connector available for SIEM type: {siem_type}")
+                print(f"[DEBUG] No connector available for connector type: {connector_type}")
             return None
             
         except Exception as e:
             log_event(
                 event_id=996,
                 solution_name="inopli_middleware",
-                data_source=siem_type,
+                data_source=source_name,
                 class_name="MiddlewareManager",
                 method="_create_connector",
                 event_type="error",
                 description=str(e)
             )
             if DEBUG_MODE:
-                print(f"[ERROR] Failed to create connector for {siem_type}: {e}")
+                print(f"[ERROR] Failed to create connector for {source_name}: {e}")
             return None
     
     def start_connectors(self):

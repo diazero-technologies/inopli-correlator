@@ -21,7 +21,8 @@ class QRadarConnector(SIEMConnector):
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
         self.api_config = config.get("api_config", {})
-        self.tenants_config = config.get("tenants_config", {})
+        self.tenant_id = config.get("tenant_id", "")
+        self.tenant_config = config.get("tenant_config", {})
         self.collection_control = config.get("collection_control", {})
         self.alert_queue = []
         self.queue_lock = threading.Lock()
@@ -39,7 +40,7 @@ class QRadarConnector(SIEMConnector):
         
         if DEBUG_MODE:
             print(f"[DEBUG] Initializing QRadarConnector "
-                  f"for '{name}' with {len(self.tenants_config)} tenants")
+                  f"for '{name}' with tenant {self.tenant_id}")
             print(f"[DEBUG] Last offense ID: {self.last_offense_id}")
 
     def connect(self) -> bool:
@@ -80,19 +81,13 @@ class QRadarConnector(SIEMConnector):
             return False
 
     def collect_alerts(self) -> List[Dict[str, Any]]:
-        """Collect offenses from QRadar API."""
+        """Collect offenses from QRadar API for this specific tenant."""
         alerts = []
         
         try:
-            # Get offenses from all enabled tenants
-            for tenant_id, tenant_config in self.tenants_config.items():
-                qradar_config = tenant_config.get("siem_sources", {}).get("qradar", {})
-                
-                if not qradar_config.get("enabled", False):
-                    continue
-                
-                tenant_alerts = self._collect_tenant_offenses(tenant_id, qradar_config)
-                alerts.extend(tenant_alerts)
+            # Get offenses for this specific tenant
+            tenant_alerts = self._collect_tenant_offenses()
+            alerts.extend(tenant_alerts)
                 
         except Exception as e:
             log_event(
@@ -169,8 +164,8 @@ class QRadarConnector(SIEMConnector):
                 description=str(e)
             )
 
-    def _collect_tenant_offenses(self, tenant_id: str, qradar_config: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Collect offenses for a specific tenant."""
+    def _collect_tenant_offenses(self) -> List[Dict[str, Any]]:
+        """Collect offenses for this specific tenant."""
         alerts = []
         max_offense_id = self.last_offense_id
         
@@ -178,7 +173,7 @@ class QRadarConnector(SIEMConnector):
             # Build query parameters
             params = {
                 "sort": "-id",  # Sort by ID descending to get newest first
-                "limit": qradar_config.get("batch_size", 100)
+                "limit": self.config.get("batch_size", 100)
             }
             
             # Add ID filter to get only offenses newer than last collected
@@ -186,7 +181,7 @@ class QRadarConnector(SIEMConnector):
                 params["filter"] = f"id>{self.last_offense_id}"
             
             # Add status filter
-            status_filter = qradar_config.get("status_filter", "OPEN")
+            status_filter = self.config.get("status_filter", "OPEN")
             if status_filter != "ALL":
                 if "filter" in params:
                     params["filter"] += f" and status='{status_filter}'"
@@ -198,7 +193,7 @@ class QRadarConnector(SIEMConnector):
             headers = self._get_auth_headers()
             
             if DEBUG_MODE:
-                print(f"[DEBUG] Collecting offenses for tenant {tenant_id} with filter: {params.get('filter', 'None')}")
+                print(f"[DEBUG] Collecting offenses for tenant {self.tenant_id} with filter: {params.get('filter', 'None')}")
             
             response = self.session.get(url, headers=headers, params=params, timeout=30)
             
@@ -212,7 +207,7 @@ class QRadarConnector(SIEMConnector):
                         max_offense_id = offense_id
                     
                     # Add tenant information to the offense
-                    offense["_tenant_id"] = tenant_id
+                    offense["_tenant_id"] = self.tenant_id
                     offense["_siem_source"] = "qradar"
                     
                     # Validate and add to alerts
@@ -225,17 +220,17 @@ class QRadarConnector(SIEMConnector):
                     self._save_last_offense_id(max_offense_id)
                 
                 if DEBUG_MODE:
-                    print(f"[DEBUG] Collected {len(alerts)} offenses for tenant {tenant_id}")
+                    print(f"[DEBUG] Collected {len(alerts)} offenses for tenant {self.tenant_id}")
                     if max_offense_id > self.last_offense_id:
                         print(f"[DEBUG] Updated last offense ID to: {max_offense_id}")
                     
             else:
                 if DEBUG_MODE:
-                    print(f"[ERROR] Failed to get offenses for tenant {tenant_id}. Status: {response.status_code}")
+                    print(f"[ERROR] Failed to get offenses for tenant {self.tenant_id}. Status: {response.status_code}")
                     
         except Exception as e:
             if DEBUG_MODE:
-                print(f"[ERROR] Error collecting offenses for tenant {tenant_id}: {e}")
+                print(f"[ERROR] Error collecting offenses for tenant {self.tenant_id}: {e}")
             log_event(
                 event_id=997,
                 solution_name="inopli_middleware",
@@ -243,7 +238,7 @@ class QRadarConnector(SIEMConnector):
                 class_name="QRadarConnector",
                 method="_collect_tenant_offenses",
                 event_type="error",
-                description=f"Tenant {tenant_id}: {str(e)}"
+                description=f"Tenant {self.tenant_id}: {str(e)}"
             )
         
         return alerts
@@ -251,18 +246,11 @@ class QRadarConnector(SIEMConnector):
     def validate_alert(self, alert: Dict[str, Any]) -> bool:
         """Validate if an offense should be processed based on tenant filters."""
         tenant_id = alert.get("_tenant_id")
-        if not tenant_id:
-            return False
-            
-        tenant_config = self.tenants_config.get(tenant_id, {})
-        qradar_config = tenant_config.get("siem_sources", {}).get("qradar", {})
-        
-        # Check if QRadar is enabled for this tenant
-        if not qradar_config.get("enabled", False):
+        if not tenant_id or tenant_id != self.tenant_id:
             return False
         
         # Apply rule filters
-        rule_filters = qradar_config.get("rule_filters", {})
+        rule_filters = self.config.get("rule_filters", {})
         if rule_filters:
             # Check rule IDs
             rule_ids_filter = rule_filters.get("rule_ids", ["*"])
@@ -280,7 +268,7 @@ class QRadarConnector(SIEMConnector):
                 return False
         
         # Apply source filters
-        source_filters = qradar_config.get("source_filters", {})
+        source_filters = self.config.get("source_filters", {})
         if source_filters:
             # Check source networks
             source_networks_filter = source_filters.get("source_networks", ["*"])

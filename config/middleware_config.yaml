@@ -11,30 +11,16 @@ alert_processing:
   batch_size: 10
   timeout: 30  # seconds
 
-# Connector configurations
+# Connector configurations (only global settings)
 connectors:
   wazuh:
     enabled: true
     file_monitoring: true
     buffer_size: 8192
     
+  # Global connector settings (if any) - specific configs moved to tenants
   qradar:
-    enabled: true
-    polling_interval: 5  # minutes between API calls
-    api_config:
-      base_url: "https://<ip_address>"
-      auth_token: "YOUR_QRADAR_AUTH_TOKEN"
-      api_version: "17"
-      verify_ssl: false
-    # Control settings for offense collection
-    collection_control:
-      last_offense_id: 0  # Last collected offense ID (0 = start from beginning)
-      save_last_id: true  # Whether to save the last ID after each collection
-      id_file_path: "config/qradar_last_id.json"  # File to persist last ID
-    # Future connectors can be added here
-    # crowdstrike:
-    #   enabled: false
-    #   api_endpoint: "https://api.crowdstrike.com"
+    enabled: true  # Global enable/disable for QRadar connector type
 
 # Logging and monitoring
 monitoring:
@@ -63,8 +49,20 @@ tenants:
           # agent_ids: ["001", "002", "003"]
         alert_mode: "cti_only"  # all, cti_only, none
       
-      qradar:
+      # QRadar instance 1 - Production environment
+      qradar_prod:
         enabled: true
+        connector_type: "qradar"  # Specify the connector type
+        polling_interval: 5  # minutes between API calls
+        api_config:
+          base_url: "https://qradar-prod.company.com"
+          auth_token: "YOUR_QRADAR_PROD_AUTH_TOKEN"
+          api_version: "17"
+          verify_ssl: true
+        collection_control:
+          last_offense_id: 0
+          save_last_id: true
+          id_file_path: "config/qradar_prod_last_id.json"
         batch_size: 100
         status_filter: "OPEN"  # OPEN, CLOSED, ALL
         rule_filters:
@@ -77,6 +75,29 @@ tenants:
           # Or specify specific networks
           # source_networks: ["Vlan_25_Lab_Ingenieria.Vlan_25_Lab_Ingenieria"]
         alert_mode: "cti_only"  # all, cti_only, none
+      
+      # QRadar instance 2 - Development environment
+      qradar_dev:
+        enabled: true
+        connector_type: "qradar"  # Specify the connector type
+        polling_interval: 10  # minutes between API calls
+        api_config:
+          base_url: "https://qradar-dev.company.com"
+          auth_token: "YOUR_QRADAR_DEV_AUTH_TOKEN"
+          api_version: "17"
+          verify_ssl: false
+        collection_control:
+          last_offense_id: 0
+          save_last_id: true
+          id_file_path: "config/qradar_dev_last_id.json"
+        batch_size: 50
+        status_filter: "OPEN"
+        rule_filters:
+          rule_ids: ["*"]  # All rules in dev
+          min_severity: 3
+        source_filters:
+          source_networks: ["*"]
+        alert_mode: "all"
 
   tenant2:
     name: "Empresa B"
@@ -91,8 +112,20 @@ tenants:
           agent_ids: ["001", "002"]
         alert_mode: "all"
       
-      qradar:
+      # QRadar instance for tenant2
+      qradar_main:
         enabled: true
+        connector_type: "qradar"
+        polling_interval: 15  # minutes between API calls
+        api_config:
+          base_url: "https://qradar-tenant2.company.com"
+          auth_token: "YOUR_QRADAR_TENANT2_AUTH_TOKEN"
+          api_version: "17"
+          verify_ssl: true
+        collection_control:
+          last_offense_id: 0
+          save_last_id: true
+          id_file_path: "config/qradar_tenant2_last_id.json"
         batch_size: 50
         status_filter: "OPEN"
         rule_filters:
