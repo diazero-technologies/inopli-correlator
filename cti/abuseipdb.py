@@ -1,6 +1,7 @@
 import requests
 from .base import ThreatIntelligenceIntegration
 from config.debug import DEBUG_MODE
+from utils.ip_utils import is_public_ip
 
 class AbuseIPDBIntegration(ThreatIntelligenceIntegration):
     SUPPORTED_FIELDS = ["ip"]
@@ -28,6 +29,12 @@ class AbuseIPDBIntegration(ThreatIntelligenceIntegration):
         return {"Key": self.api_key, "Accept": "application/json"}
 
     def _query_ip(self, ip):
+        # Check if IP is public before querying AbuseIPDB
+        if not is_public_ip(ip):
+            if DEBUG_MODE:
+                print(f"[DEBUG] IP {ip} is not public, skipping AbuseIPDB query")
+            return None
+            
         params = {
             "ipAddress": ip,
             "maxAgeInDays": 90,  # You can make this configurable

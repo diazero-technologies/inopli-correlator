@@ -1,5 +1,6 @@
 import requests
 from .base import ThreatIntelligenceIntegration
+from utils.ip_utils import is_public_ip
 
 class HybridAnalysisIntegration(ThreatIntelligenceIntegration):
     SUPPORTED_FIELDS = ["file_hash", "url"]

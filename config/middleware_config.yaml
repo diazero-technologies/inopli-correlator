@@ -1,0 +1,103 @@
+# Middleware Configuration for Inopli Correlator
+# This is the new middleware architecture configuration
+
+# Global middleware settings
+enabled: true
+polling_interval: 30  # seconds between polling cycles
+
+# Alert processing settings
+alert_processing:
+  max_queue_size: 1000
+  batch_size: 10
+  timeout: 30  # seconds
+
+# Connector configurations
+connectors:
+  wazuh:
+    enabled: true
+    file_monitoring: true
+    buffer_size: 8192
+    
+  qradar:
+    enabled: true
+    polling_interval: 5  # minutes between API calls
+    api_config:
+      base_url: "https://<ip_address>"
+      auth_token: "YOUR_QRADAR_AUTH_TOKEN"
+      api_version: "17"
+      verify_ssl: false
+    # Control settings for offense collection
+    collection_control:
+      last_offense_id: 0  # Last collected offense ID (0 = start from beginning)
+      save_last_id: true  # Whether to save the last ID after each collection
+      id_file_path: "config/qradar_last_id.json"  # File to persist last ID
+    # Future connectors can be added here
+    # crowdstrike:
+    #   enabled: false
+    #   api_endpoint: "https://api.crowdstrike.com"
+
+# Logging and monitoring
+monitoring:
+  health_check_interval: 300  # seconds
+  metrics_enabled: true
+  debug_mode: false
+
+# Multi-tenant configuration for middleware
+tenants:
+  tenant1:
+    name: "Empresa A"
+    token: "YOUR_TENANT1_TOKEN"
+    siem_sources:
+      wazuh:
+        enabled: true
+        file_path: "/var/ossec/logs/alerts/alerts.json"
+        rule_filters:
+          # Send all alerts with wildcard
+          rule_ids: ["*"]
+          # Or specify specific rule IDs
+          # rule_ids: [100001, 100002, 81633]
+        agent_filters:
+          # Send from all agents with wildcard
+          agent_ids: ["*"]
+          # Or specify specific agent IDs
+          # agent_ids: ["001", "002", "003"]
+        alert_mode: "cti_only"  # all, cti_only, none
+      
+      qradar:
+        enabled: true
+        batch_size: 100
+        status_filter: "OPEN"  # OPEN, CLOSED, ALL
+        rule_filters:
+          # Filter only "Firewall Permit" offenses
+          rule_ids: ["Firewall Permit"]
+          min_severity: 5  # Minimum severity level (0-10)
+        source_filters:
+          # Send from all source networks with wildcard
+          source_networks: ["*"]
+          # Or specify specific networks
+          # source_networks: ["Vlan_25_Lab_Ingenieria.Vlan_25_Lab_Ingenieria"]
+        alert_mode: "cti_only"  # all, cti_only, none
+
+  tenant2:
+    name: "Empresa B"
+    token: "YOUR_TENANT2_TOKEN"
+    siem_sources:
+      wazuh:
+        enabled: false
+        file_path: "/var/ossec/logs/alerts/alerts.json"
+        rule_filters:
+          rule_ids: [100001, 100002, 100003]
+        agent_filters:
+          agent_ids: ["001", "002"]
+        alert_mode: "all"
+      
+      qradar:
+        enabled: true
+        batch_size: 50
+        status_filter: "OPEN"
+        rule_filters:
+          rule_ids: [100100, 100102, 100232]
+          min_severity: 7
+        source_filters:
+          source_networks: ["Vlan_25_Lab_Ingenieria.Vlan_25_Lab_Ingenieria"]
+        alert_mode: "all" 

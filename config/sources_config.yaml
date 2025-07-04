@@ -1,7 +1,7 @@
 tenants:
   tenant1:
     name: "Empresa A"
-    token: "abcde12345"
+    token: "YOUR_TENANT1_TOKEN"
     data_sources:
       - name: "linux_auth"
         path: "/var/log/auth.log"
@@ -43,7 +43,7 @@ tenants:
 
   tenant2:
     name: "Empresa B"
-    token: "zyxw98765"
+    token: "YOUR_TENANT2_TOKEN"
     data_sources:
       - name: "linux"
         path: "/var/log/auth.log"

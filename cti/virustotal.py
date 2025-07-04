@@ -2,6 +2,7 @@ import requests
 import base64
 from .base import ThreatIntelligenceIntegration
 from config.debug import DEBUG_MODE
+from utils.ip_utils import is_public_ip
 
 class VirusTotalIntegration(ThreatIntelligenceIntegration):
     SUPPORTED_FIELDS = ["ip", "domain", "file_hash", "url"]
@@ -34,6 +35,12 @@ class VirusTotalIntegration(ThreatIntelligenceIntegration):
         return {"x-apikey": self.api_key}
 
     def _query_ip(self, ip):
+        # Check if IP is public before querying VirusTotal
+        if not is_public_ip(ip):
+            if DEBUG_MODE:
+                print(f"[DEBUG] IP {ip} is not public, skipping VirusTotal query")
+            return None
+            
         url = f"{self.BASE_URL}/ip_addresses/{ip}"
         resp = requests.get(url, headers=self._headers(), timeout=10)
         if resp.status_code != 200:
