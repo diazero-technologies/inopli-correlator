@@ -13,9 +13,6 @@ from utils.tenant_router import resolve_tenant
 
 
 class LinuxLogHandler(FileSystemEventHandler):
-    """
-    Watchdog handler for monitoring Linux log files.
-    """
 
     def __init__(self, monitor):
         self.monitor = monitor
@@ -24,7 +21,6 @@ class LinuxLogHandler(FileSystemEventHandler):
         self._open_file()
 
     def _open_file(self):
-        """Safely open the file and seek to the end"""
         try:
             if self.file:
                 self.file.close()
@@ -43,7 +39,6 @@ class LinuxLogHandler(FileSystemEventHandler):
             )
 
     def on_modified(self, event):
-        """Handle file modification events"""
         if event.src_path != self.monitor.file_path:
             return
 
@@ -96,7 +91,6 @@ class LinuxLogHandler(FileSystemEventHandler):
             )
 
     def on_deleted(self, event):
-        """Handle file deletion events"""
         if event.src_path == self.monitor.file_path:
             if self.file:
                 self.file.close()
@@ -104,16 +98,11 @@ class LinuxLogHandler(FileSystemEventHandler):
             self.position = 0
 
     def on_created(self, event):
-        """Handle file creation events"""
         if event.src_path == self.monitor.file_path:
             self._open_file()
 
 
 class LinuxMonitor:
-    """
-    Main class for Linux log monitoring. Supports both line-based and filesystem watcher rules.
-    Uses watchdog for reliable file monitoring and integrates with multi-tenant logic.
-    """
 
     def __init__(self, source_name, file_path, allowed_event_types):
         self.source_name = source_name
@@ -131,10 +120,6 @@ class LinuxMonitor:
         self._load_rules()
 
     def _load_rules(self):
-        """
-        Loads rule classes from datasources/linux_rules using explicit mapping.
-        Also injects multi-tenant support into rule instances.
-        """
         rule_modules = {
             "bruteforce_rule": "BruteforceRule",
             "user_enum_rule": "UserEnumerationRule",
@@ -183,10 +168,6 @@ class LinuxMonitor:
                     print(f"[ERROR] Failed to load rule {module_name}: {str(e)}")
 
     def run(self):
-        """
-        Start monitoring the log file using watchdog observer and
-        initialize filesystem watchers for rules that require it.
-        """
         try:
             if DEBUG_MODE:
                 print(f"[DEBUG] Running monitor for {self.source_name}")

@@ -11,10 +11,6 @@ from middleware.connectors.qradar_connector import QRadarConnector
 
 
 class MiddlewareManager:
-    """
-    Main manager for the SIEM middleware.
-    Handles loading configuration, managing connectors, and coordinating alert processing.
-    """
     
     def __init__(self, config_path: str = "config/middleware_config.yaml"):
         self.config_path = config_path
@@ -28,17 +24,11 @@ class MiddlewareManager:
     
     @classmethod
     def get_instance(cls):
-        """Get the singleton instance."""
         if not hasattr(cls, '_instance'):
             cls._instance = cls()
         return cls._instance
     
     def _merge_with_wildcard(self, existing_values, new_values):
-        """
-        Merge two lists of values, handling wildcards.
-        If either list contains '*', returns ['*'].
-        Otherwise, returns the union of both lists.
-        """
         if not isinstance(existing_values, (list, set)):
             existing_values = list(existing_values) if existing_values else []
         if not isinstance(new_values, (list, set)):
@@ -52,7 +42,6 @@ class MiddlewareManager:
         return list(set(existing_values) | set(new_values))
     
     def load_config(self) -> bool:
-        """Load middleware configuration from YAML file."""
         try:
             if not os.path.exists(self.config_path):
                 if DEBUG_MODE:
@@ -85,10 +74,6 @@ class MiddlewareManager:
             return False
     
     def create_connectors(self) -> bool:
-        """
-        Create SIEM connectors based on middleware configuration.
-        Creates individual connectors for each SIEM source instance in each tenant.
-        """
         try:
             # Stop existing connectors
             self.stop_connectors()
@@ -139,7 +124,6 @@ class MiddlewareManager:
             return False
     
     def _get_connector_configs(self) -> Dict[str, Any]:
-        """Get connector configurations from middleware config file."""
         try:
             with open(self.config_path, "r") as f:
                 config = yaml.safe_load(f)
@@ -152,7 +136,6 @@ class MiddlewareManager:
             return {}
     
     def _create_connector(self, source_name: str, source_config: Dict[str, Any], tenant_id: str) -> SIEMConnector | None:
-        """Create a specific connector based on the source configuration."""
         try:
             connector_type = source_config.get("connector_type", source_name.split("_")[0])
             
@@ -205,7 +188,6 @@ class MiddlewareManager:
             return None
     
     def start_connectors(self):
-        """Start all enabled connectors."""
         try:
             for name, connector in self.connectors.items():
                 connector.start()
@@ -227,7 +209,6 @@ class MiddlewareManager:
                 print(f"[ERROR] Failed to start connectors: {e}")
     
     def stop_connectors(self):
-        """Stop all connectors."""
         try:
             for name, connector in self.connectors.items():
                 connector.stop()
@@ -249,7 +230,6 @@ class MiddlewareManager:
                 print(f"[ERROR] Failed to stop connectors: {e}")
     
     def start(self):
-        """Start the middleware manager."""
         if self.running:
             if DEBUG_MODE:
                 print("[DEBUG] Middleware manager is already running")
@@ -277,7 +257,6 @@ class MiddlewareManager:
                 print(f"[ERROR] Failed to start middleware manager: {e}")
     
     def stop(self):
-        """Stop the middleware manager."""
         self.running = False
         self.stop_connectors()
         
@@ -288,7 +267,6 @@ class MiddlewareManager:
             print("[INFO] Stopped middleware manager")
     
     def _run_loop(self):
-        """Main loop for the middleware manager."""
         while self.running:
             try:
                 # Check if any connectors need restarting

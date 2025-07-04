@@ -12,11 +12,6 @@ from config.debug import DEBUG_MODE
 
 
 class QRadarConnector(SIEMConnector):
-    """
-    Connector for QRadar SIEM offenses.
-    Collects offenses from QRadar API using REST endpoints.
-    Supports multi-tenant configuration with individual filtering per tenant.
-    """
 
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
@@ -34,9 +29,29 @@ class QRadarConnector(SIEMConnector):
         
         # Configure session with SSL verification settings
         self.session.verify = self.api_config.get("verify_ssl", False)
+        
+        # SSL configuration for handling invalid certificates
+        ssl_config = self.api_config.get("ssl_config", {})
+        
         if not self.session.verify:
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            
+        # Configure custom SSL context if provided
+        if ssl_config.get("custom_cert_path") or ssl_config.get("disable_hostname_check"):
+            import ssl
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = ssl_config.get("check_hostname", True)
+            ssl_context.verify_mode = ssl.CERT_NONE if not ssl_config.get("verify_cert", True) else ssl.CERT_REQUIRED
+            
+            if ssl_config.get("custom_cert_path"):
+                ssl_context.load_verify_locations(ssl_config["custom_cert_path"])
+            
+            # Use the SSL context as a string path or boolean
+            if ssl_config.get("custom_cert_path"):
+                self.session.verify = ssl_config["custom_cert_path"]
+            else:
+                self.session.verify = ssl_config.get("verify_cert", True)
         
         if DEBUG_MODE:
             print(f"[DEBUG] Initializing QRadarConnector "
@@ -44,7 +59,6 @@ class QRadarConnector(SIEMConnector):
             print(f"[DEBUG] Last offense ID: {self.last_offense_id}")
 
     def connect(self) -> bool:
-        """Establish connection to QRadar by testing API connectivity."""
         try:
             # Test connection by making a simple API call
             test_url = f"{self.api_config['base_url']}/api/siem/offenses"
@@ -81,7 +95,6 @@ class QRadarConnector(SIEMConnector):
             return False
 
     def collect_alerts(self) -> List[Dict[str, Any]]:
-        """Collect offenses from QRadar API for this specific tenant."""
         alerts = []
         
         try:
@@ -105,7 +118,6 @@ class QRadarConnector(SIEMConnector):
         return alerts
 
     def _load_last_offense_id(self) -> int:
-        """Load the last collected offense ID from file or config."""
         try:
             # First try to load from file
             id_file_path = self.collection_control.get("id_file_path", "config/qradar_last_id.json")
@@ -130,7 +142,6 @@ class QRadarConnector(SIEMConnector):
             return 0
 
     def _save_last_offense_id(self, offense_id: int):
-        """Save the last collected offense ID to file."""
         try:
             if not self.collection_control.get("save_last_id", True):
                 return
@@ -165,7 +176,6 @@ class QRadarConnector(SIEMConnector):
             )
 
     def _collect_tenant_offenses(self) -> List[Dict[str, Any]]:
-        """Collect offenses for this specific tenant."""
         alerts = []
         max_offense_id = self.last_offense_id
         
@@ -244,7 +254,6 @@ class QRadarConnector(SIEMConnector):
         return alerts
 
     def validate_alert(self, alert: Dict[str, Any]) -> bool:
-        """Validate if an offense should be processed based on tenant filters."""
         tenant_id = alert.get("_tenant_id")
         if not tenant_id or tenant_id != self.tenant_id:
             return False
@@ -280,7 +289,6 @@ class QRadarConnector(SIEMConnector):
         return True
 
     def _get_auth_headers(self) -> Dict[str, str]:
-        """Get authentication headers for QRadar API."""
         headers = {
             "Accept": "application/json",
             "Version": self.api_config.get("api_version", "17"),
@@ -289,19 +297,16 @@ class QRadarConnector(SIEMConnector):
         return headers
 
     def start(self):
-        """Start the connector and initialize collection time."""
         super().start()
         if self.running:
             self.last_collection_time = datetime.now() - timedelta(minutes=5)  # Start from 5 minutes ago
 
     def stop(self):
-        """Stop the connector and close session."""
         super().stop()
         if self.session:
             self.session.close()
 
     def _add_alert(self, alert: Dict[str, Any]):
-        """Add alert to the queue (thread-safe)."""
         with self.queue_lock:
             self.alert_queue.append(alert)
             # Keep only the last 1000 alerts to prevent memory issues
@@ -309,7 +314,6 @@ class QRadarConnector(SIEMConnector):
                 self.alert_queue = self.alert_queue[-1000:]
 
     def _run_loop(self):
-        """Override the base run loop to update collection time."""
         while self.running:
             try:
                 alerts = self.collect_alerts()

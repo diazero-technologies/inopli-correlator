@@ -59,6 +59,10 @@ tenants:
           auth_token: "YOUR_QRADAR_PROD_AUTH_TOKEN"
           api_version: "17"
           verify_ssl: true
+          ssl_config:
+            verify_cert: true
+            check_hostname: true
+            custom_cert_path: null  # Path to custom CA certificate if needed
         collection_control:
           last_offense_id: 0
           save_last_id: true
@@ -86,6 +90,10 @@ tenants:
           auth_token: "YOUR_QRADAR_DEV_AUTH_TOKEN"
           api_version: "17"
           verify_ssl: false
+          ssl_config:
+            verify_cert: false
+            check_hostname: false
+            custom_cert_path: null
         collection_control:
           last_offense_id: 0
           save_last_id: true
@@ -122,6 +130,10 @@ tenants:
           auth_token: "YOUR_QRADAR_TENANT2_AUTH_TOKEN"
           api_version: "17"
           verify_ssl: true
+          ssl_config:
+            verify_cert: true
+            check_hostname: true
+            custom_cert_path: null
         collection_control:
           last_offense_id: 0
           save_last_id: true

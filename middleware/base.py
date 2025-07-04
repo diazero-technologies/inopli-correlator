@@ -7,10 +7,6 @@ from config.debug import DEBUG_MODE
 
 
 class SIEMConnector(ABC):
-    """
-    Base class for SIEM connectors.
-    Each SIEM connector should implement this interface.
-    """
     
     def __init__(self, name: str, config: Dict[str, Any]):
         self.name = name
@@ -21,30 +17,17 @@ class SIEMConnector(ABC):
         
     @abstractmethod
     def connect(self) -> bool:
-        """
-        Establish connection to the SIEM.
-        Returns True if successful, False otherwise.
-        """
         pass
     
     @abstractmethod
     def collect_alerts(self) -> List[Dict[str, Any]]:
-        """
-        Collect alerts from the SIEM.
-        Returns a list of alert dictionaries.
-        """
         pass
     
     @abstractmethod
     def validate_alert(self, alert: Dict[str, Any]) -> bool:
-        """
-        Validate if an alert should be processed.
-        Returns True if valid, False otherwise.
-        """
         pass
     
     def start(self):
-        """Start the connector in a separate thread."""
         if not self.enabled:
             if DEBUG_MODE:
                 print(f"[DEBUG] Connector {self.name} is disabled, skipping start.")
@@ -84,7 +67,6 @@ class SIEMConnector(ABC):
             )
     
     def stop(self):
-        """Stop the connector."""
         self.running = False
         if self.thread:
             self.thread.join(timeout=5)
@@ -92,7 +74,6 @@ class SIEMConnector(ABC):
             print(f"[INFO] Stopped SIEM connector: {self.name}")
     
     def _run_loop(self):
-        """Main processing loop for the connector."""
         while self.running:
             try:
                 alerts = self.collect_alerts()

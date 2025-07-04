@@ -13,9 +13,6 @@ from integrations.integration_manager import IntegrationManager
 
 
 class WazuhFileHandler(FileSystemEventHandler):
-    """
-    Watchdog handler for monitoring Wazuh alerts file.
-    """
 
     def __init__(self, monitor):
         self.monitor = monitor
@@ -24,7 +21,6 @@ class WazuhFileHandler(FileSystemEventHandler):
         self._open_file()
 
     def _open_file(self):
-        """Safely open the file and seek to the end"""
         try:
             if self.file:
                 self.file.close()
@@ -43,7 +39,6 @@ class WazuhFileHandler(FileSystemEventHandler):
             )
 
     def on_modified(self, event):
-        """Handle file modification events by reading and buffering all new content."""
         if event.src_path != self.monitor.file_path:
             return
 
@@ -120,7 +115,6 @@ class WazuhFileHandler(FileSystemEventHandler):
             )
 
     def on_deleted(self, event):
-        """Handle file deletion events"""
         if event.src_path == self.monitor.file_path:
             if DEBUG_MODE:
                 print(f"[DEBUG] Watched file deleted: {event.src_path}")
@@ -131,7 +125,6 @@ class WazuhFileHandler(FileSystemEventHandler):
             self.buffer = ""
 
     def on_created(self, event):
-        """Handle file creation events"""
         if event.src_path == self.monitor.file_path:
             if DEBUG_MODE:
                 print(f"[DEBUG] Watched file created: {event.src_path}")
@@ -139,7 +132,6 @@ class WazuhFileHandler(FileSystemEventHandler):
             self.buffer = ""
 
     def on_moved(self, event):
-        """Handle file move events (log rotation)"""
         # If the file we were watching was moved away
         if event.src_path == self.monitor.file_path:
             if DEBUG_MODE:
@@ -159,10 +151,6 @@ class WazuhFileHandler(FileSystemEventHandler):
 
 
 class WazuhFileMonitor:
-    """
-    Monitors the Wazuh alerts.json file using watchdog for reliable monitoring.
-    Supports wildcard filtering on agent_ids and event_types.
-    """
 
     def __init__(self, source_name, file_path, allowed_event_types, agent_ids=None):
         self.source_name = source_name
@@ -179,9 +167,6 @@ class WazuhFileMonitor:
                   f"with agent_ids={self.agent_ids!r} and event_types={self.allowed_event_types!r}")
 
     def run(self):
-        """
-        Start monitoring the alerts.json file using watchdog observer.
-        """
         try:
             if not os.path.exists(os.path.dirname(self.file_path)):
                 raise FileNotFoundError(f"Directory not found: {os.path.dirname(self.file_path)}")

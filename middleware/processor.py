@@ -8,10 +8,6 @@ from config.debug import DEBUG_MODE
 
 
 class AlertProcessor:
-    """
-    Singleton class for processing alerts through the middleware.
-    Handles enrichment, filtering, and routing to tenants.
-    """
     
     _instance = None
     _lock = threading.Lock()
@@ -25,25 +21,15 @@ class AlertProcessor:
         return cls._instance
     
     def _init(self):
-        """Initialize the processor instance."""
         self.integration_manager = IntegrationManager()
         if DEBUG_MODE:
             print("[DEBUG] AlertProcessor initialized")
     
     @classmethod
     def get_instance(cls):
-        """Get the singleton instance."""
         return cls()
     
     def process_alert(self, alert: Dict[str, Any], source_name: str):
-        """
-        Process an alert through the middleware pipeline:
-        1. Apply filters and validation
-        2. Extract rule ID and check if it should be processed
-        3. Route to appropriate tenants
-        4. Apply CTI enrichment and business rules
-        5. Send to Inopli based on business rules
-        """
         try:
             # Step 1: Validate and prepare alert
             if not self._validate_alert(alert, source_name):
@@ -83,7 +69,6 @@ class AlertProcessor:
                 print(f"[ERROR] AlertProcessor.process_alert(): {e}")
     
     def _validate_alert(self, alert: Dict[str, Any], source_name: str) -> bool:
-        """Validate that the alert has required fields."""
         if not alert or not isinstance(alert, dict):
             return False
         
@@ -94,7 +79,6 @@ class AlertProcessor:
         return True
     
     def _extract_rule_id(self, alert: Dict[str, Any], source_name: str) -> Optional[int]:
-        """Extract rule ID from alert based on source type."""
         try:
             if source_name == "wazuh_file" or source_name == "wazuh_o365":
                 rule_obj = alert.get("rule", {})
@@ -121,7 +105,6 @@ class AlertProcessor:
             return None
     
     def _route_to_tenants(self, alert: Dict[str, Any], source_name: str, rule_id: int) -> List[tuple]:
-        """Route alert to appropriate tenants based on middleware configuration."""
         tenant_matches = []
         
         # Get tenant configurations from middleware manager
@@ -192,10 +175,6 @@ class AlertProcessor:
         return tenant_matches
     
     def _process_and_send_alert(self, alert: Dict[str, Any], tenant_id: str, token: str, source_name: str, rule_id: int, alert_mode: str):
-        """
-        Process alert with CTI enrichment and business rules, then send to tenant.
-        This method implements the business logic for alert processing.
-        """
         try:
             # Add source information to alert
             alert["source"] = source_name
@@ -279,7 +258,6 @@ class AlertProcessor:
                 print(f"[ERROR] Failed to process alert for tenant {tenant_id}: {e}")
     
     def _send_single_alert(self, alert: Dict[str, Any], tenant_id: str, token: str, source_name: str, rule_id: int):
-        """Send a single alert to a specific tenant."""
         try:
             # Ensure alert has required fields
             if "detection_rule_id" not in alert:

@@ -12,10 +12,6 @@ from config.debug import DEBUG_MODE
 
 
 class WazuhFileHandler(FileSystemEventHandler):
-    """
-    Watchdog handler for monitoring Wazuh alerts file.
-    Adapted from the original datasource implementation.
-    """
 
     def __init__(self, connector):
         self.connector = connector
@@ -25,7 +21,6 @@ class WazuhFileHandler(FileSystemEventHandler):
         self._open_file()
 
     def _open_file(self):
-        """Safely open the file and seek to the end"""
         try:
             if self.file:
                 self.file.close()
@@ -44,7 +39,6 @@ class WazuhFileHandler(FileSystemEventHandler):
             )
 
     def on_modified(self, event):
-        """Handle file modification events by reading and buffering all new content."""
         if event.src_path != self.connector.config["file_path"]:
             return
 
@@ -122,7 +116,6 @@ class WazuhFileHandler(FileSystemEventHandler):
             )
 
     def on_deleted(self, event):
-        """Handle file deletion events"""
         if event.src_path == self.connector.config["file_path"]:
             if DEBUG_MODE:
                 print(f"[DEBUG] Watched file deleted: {event.src_path}")
@@ -133,7 +126,6 @@ class WazuhFileHandler(FileSystemEventHandler):
             self.buffer = ""
 
     def on_created(self, event):
-        """Handle file creation events"""
         if event.src_path == self.connector.config["file_path"]:
             if DEBUG_MODE:
                 print(f"[DEBUG] Watched file created: {event.src_path}")
@@ -141,7 +133,6 @@ class WazuhFileHandler(FileSystemEventHandler):
             self.buffer = ""
 
     def on_moved(self, event):
-        """Handle file move events (log rotation)"""
         # If the file we were watching was moved away
         if event.src_path == self.connector.config["file_path"]:
             if DEBUG_MODE:
@@ -161,11 +152,6 @@ class WazuhFileHandler(FileSystemEventHandler):
 
 
 class WazuhConnector(SIEMConnector):
-    """
-    Connector for Wazuh SIEM alerts.
-    Monitors the Wazuh alerts.json file using watchdog for reliable monitoring.
-    Supports multi-tenant configuration with individual filtering per tenant.
-    """
 
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
@@ -185,7 +171,6 @@ class WazuhConnector(SIEMConnector):
                   f"at path '{self.file_path}'")
     
     def _get_file_path_from_tenants(self) -> str:
-        """Get file path from the first enabled tenant configuration."""
         for tenant_id, tenant_data in self.tenants_config.items():
             wazuh_config = tenant_data.get("siem_sources", {}).get("wazuh", {})
             if wazuh_config.get("enabled", False):
@@ -193,7 +178,6 @@ class WazuhConnector(SIEMConnector):
         return ""
 
     def connect(self) -> bool:
-        """Establish connection to Wazuh by checking file accessibility."""
         try:
             if not self.file_path:
                 if DEBUG_MODE:
@@ -224,14 +208,12 @@ class WazuhConnector(SIEMConnector):
             return False
 
     def collect_alerts(self) -> List[Dict[str, Any]]:
-        """Collect alerts from the internal queue."""
         with self.queue_lock:
             alerts = self.alert_queue.copy()
             self.alert_queue.clear()
         return alerts
 
     def validate_alert(self, alert: Dict[str, Any]) -> bool:
-        """Validate if an alert should be processed based on tenant configurations."""
         try:
             # Extract alert information
             agent = alert.get("agent", {}) or {}
@@ -279,7 +261,6 @@ class WazuhConnector(SIEMConnector):
             return False
 
     def start(self):
-        """Start the Wazuh connector with file monitoring."""
         if not super().start():
             return
             
@@ -306,13 +287,11 @@ class WazuhConnector(SIEMConnector):
                 print(f"[ERROR] {self.__class__.__name__}.start(): {e}")
 
     def stop(self):
-        """Stop the Wazuh connector."""
         if self.observer:
             self.observer.stop()
             self.observer.join()
         super().stop()
 
     def _add_alert(self, alert: Dict[str, Any]):
-        """Add an alert to the internal queue."""
         with self.queue_lock:
             self.alert_queue.append(alert) 

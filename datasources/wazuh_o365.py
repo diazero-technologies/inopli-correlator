@@ -15,9 +15,6 @@ from integrations.integration_manager import IntegrationManager
 
 
 class WazuhO365Handler(FileSystemEventHandler):
-    """
-    Watchdog handler for monitoring Wazuh O365 alerts file.
-    """
 
     def __init__(self, monitor):
         self.monitor = monitor
@@ -26,7 +23,6 @@ class WazuhO365Handler(FileSystemEventHandler):
         self._open_file()
 
     def _open_file(self):
-        """Safely open the file and seek to the end"""
         try:
             if self.file:
                 self.file.close()
@@ -45,7 +41,6 @@ class WazuhO365Handler(FileSystemEventHandler):
             )
 
     def on_modified(self, event):
-        """Handle file modification events by reading and buffering all new content."""
         if event.src_path != self.monitor.file_path:
             return
         
@@ -106,7 +101,6 @@ class WazuhO365Handler(FileSystemEventHandler):
             )
 
     def on_deleted(self, event):
-        """Handle file deletion events"""
         if event.src_path == self.monitor.file_path:
             if DEBUG_MODE:
                 print(f"[DEBUG] O365 watched file deleted: {event.src_path}")
@@ -116,14 +110,12 @@ class WazuhO365Handler(FileSystemEventHandler):
             self.position = 0
 
     def on_created(self, event):
-        """Handle file creation events"""
         if event.src_path == self.monitor.file_path:
             if DEBUG_MODE:
                 print(f"[DEBUG] O365 watched file created: {event.src_path}")
             self._open_file()
 
     def on_moved(self, event):
-        """Handle file move events (log rotation)"""
         if event.src_path == self.monitor.file_path:
             if DEBUG_MODE:
                 print(f"[DEBUG] O365 watched file moved from {event.src_path} to {event.dest_path}")

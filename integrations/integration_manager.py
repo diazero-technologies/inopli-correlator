@@ -67,10 +67,6 @@ class IntegrationManager:
         return results
 
     def process_alert(self, alert: dict):
-        """
-        Applies the business rule for alert generation.
-        Returns a list of enriched alerts/results for the rule to decide on sending.
-        """
         self._load_business_rules()  # Reload in case config changed at runtime
         enrichment_results = self.enrich_event(alert) if self.has_active_integrations() else []
         alerts_to_return = []
