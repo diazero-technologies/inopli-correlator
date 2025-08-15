@@ -109,7 +109,7 @@ class TestVirusTotalWorkflowIP(unittest.TestCase):
     @patch("integrations.integration_manager.yaml.safe_load")
     @patch("integrations.integration_manager.open", new_callable=mock_open, create=True)
     def test_full_ip_workflow(self, mock_file, mock_yaml, mock_exists, mock_send):
-        TEST_IP = "110.34.2.94"  # Example IP
+        TEST_IP = "8.8.8.8"  # Example IP
         config = {
             "virustotal": {
                 "enabled": True,

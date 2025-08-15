@@ -4,7 +4,7 @@ import threading
 import requests
 import os
 from typing import Dict, List, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from middleware.base import SIEMConnector
 from utils.event_logger import log_event
@@ -95,12 +95,21 @@ class QRadarConnector(SIEMConnector):
             return False
 
     def collect_alerts(self) -> List[Dict[str, Any]]:
+        if DEBUG_MODE:
+            print(f"[DEBUG] QRadarConnector.collect_alerts: Starting collection for {self.name}")
+        
         alerts = []
         
         try:
             # Get offenses for this specific tenant
+            if DEBUG_MODE:
+                print(f"[DEBUG] QRadarConnector.collect_alerts: Calling _collect_tenant_offenses for tenant {self.tenant_id}")
+            
             tenant_alerts = self._collect_tenant_offenses()
             alerts.extend(tenant_alerts)
+            
+            if DEBUG_MODE:
+                print(f"[DEBUG] QRadarConnector.collect_alerts: Collected {len(alerts)} total alerts")
                 
         except Exception as e:
             log_event(
@@ -113,7 +122,12 @@ class QRadarConnector(SIEMConnector):
                 description=str(e)
             )
             if DEBUG_MODE:
-                print(f"[ERROR] Error collecting alerts: {e}")
+                print(f"[ERROR] QRadarConnector.collect_alerts: Error collecting alerts: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        if DEBUG_MODE:
+            print(f"[DEBUG] QRadarConnector.collect_alerts: Returning {len(alerts)} alerts")
         
         return alerts
 
@@ -220,6 +234,22 @@ class QRadarConnector(SIEMConnector):
                     offense["_tenant_id"] = self.tenant_id
                     offense["_siem_source"] = "qradar"
                     
+                    # Add required fields for Inopli
+                    offense["timestamp"] = datetime.now(timezone.utc).isoformat()
+                    
+                    # Use description as detection_rule_id for QRadar
+                    # If description is empty, use a fallback
+                    description = offense.get("description", "")
+                    if not description or description.strip() == "":
+                        # Try to get rule name from rules array
+                        rules = offense.get("rules", [])
+                        if rules and len(rules) > 0:
+                            description = rules[0].get("name", "Unknown Rule")
+                        else:
+                            description = "Unknown Rule"
+                    
+                    offense["detection_rule_id"] = description
+                    
                     # Validate and add to alerts
                     if self.validate_alert(offense):
                         alerts.append(offense)
@@ -261,19 +291,33 @@ class QRadarConnector(SIEMConnector):
         # Apply rule filters
         rule_filters = self.config.get("rule_filters", {})
         if rule_filters:
-            # Check rule IDs
+            # Check rule IDs - for QRadar, use description as rule_id
             rule_ids_filter = rule_filters.get("rule_ids", ["*"])
             if rule_ids_filter != ["*"]:
-                offense_rules = alert.get("rules", [])
-                offense_rule_ids = [rule.get("id") for rule in offense_rules]
+                # Get the description as the rule identifier
+                description = alert.get("description", "")
+                if not description or description.strip() == "":
+                    # Try to get rule name from rules array as fallback
+                    rules = alert.get("rules", [])
+                    if rules and len(rules) > 0:
+                        description = rules[0].get("name", "")
+                    else:
+                        description = ""
                 
-                # Check if any offense rule matches the filter
-                if not any(rule_id in rule_ids_filter for rule_id in offense_rule_ids):
+                # Check if description matches any of the allowed rule_ids
+                if not any(rule_id in description for rule_id in rule_ids_filter):
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] Rule filter: description '{description[:50]}...' not in allowed rules {rule_ids_filter}")
                     return False
+                else:
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] Rule filter: description '{description[:50]}...' matches allowed rules {rule_ids_filter}")
             
             # Check severity filter
             severity_filter = rule_filters.get("min_severity", 0)
             if alert.get("severity", 0) < severity_filter:
+                if DEBUG_MODE:
+                    print(f"[DEBUG] Severity filter: {alert.get('severity', 0)} < {severity_filter}")
                 return False
         
         # Apply source filters
@@ -284,6 +328,8 @@ class QRadarConnector(SIEMConnector):
             if source_networks_filter != ["*"]:
                 offense_source_network = alert.get("source_network", "")
                 if offense_source_network not in source_networks_filter:
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] Source filter: {offense_source_network} not in allowed networks {source_networks_filter}")
                     return False
         
         return True
@@ -316,13 +362,30 @@ class QRadarConnector(SIEMConnector):
     def _run_loop(self):
         while self.running:
             try:
+                if DEBUG_MODE:
+                    print(f"[DEBUG] QRadarConnector._run_loop: Starting collection cycle for {self.name}")
+                
                 alerts = self.collect_alerts()
-                for alert in alerts:
-                    if self.validate_alert(alert):
-                        # Send to middleware processor
-                        from middleware.processor import AlertProcessor
-                        processor = AlertProcessor.get_instance()
-                        processor.process_alert(alert, self.name)
+                
+                if DEBUG_MODE:
+                    print(f"[DEBUG] QRadarConnector._run_loop: Collected {len(alerts)} alerts")
+                
+                # Only process if we have alerts
+                if alerts:
+                    for alert in alerts:
+                        if self.validate_alert(alert):
+                            if DEBUG_MODE:
+                                print(f"[DEBUG] QRadarConnector._run_loop: Processing alert {alert.get('id', 'unknown')}")
+                            # Send to middleware processor
+                            from middleware.processor import AlertProcessor
+                            processor = AlertProcessor.get_instance()
+                            processor.process_alert(alert, self.name)
+                        else:
+                            if DEBUG_MODE:
+                                print(f"[DEBUG] QRadarConnector._run_loop: Alert {alert.get('id', 'unknown')} failed validation")
+                else:
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] QRadarConnector._run_loop: No alerts to process, skipping AlertProcessor")
                 
                 # Update last collection time
                 self.last_collection_time = datetime.now()
@@ -339,10 +402,12 @@ class QRadarConnector(SIEMConnector):
                 )
                 if DEBUG_MODE:
                     print(f"[ERROR] Error in {self.name} connector: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             # Sleep before next collection (convert minutes to seconds)
             polling_interval_minutes = self.config.get("polling_interval", 5)
             sleep_seconds = polling_interval_minutes * 60
             if DEBUG_MODE:
-                print(f"[DEBUG] Sleeping for {polling_interval_minutes} minutes ({sleep_seconds} seconds)")
+                print(f"[DEBUG] QRadarConnector._run_loop: Sleeping for {polling_interval_minutes} minutes ({sleep_seconds} seconds)")
             time.sleep(sleep_seconds) 

@@ -1,7 +1,35 @@
+# Consolidated Configuration for Inopli Correlator
+# This file now contains both datasources and middleware configurations
+
+# Global middleware settings
+middleware:
+  enabled: true
+  polling_interval: 30  # seconds between polling cycles
+  alert_processing:
+    max_queue_size: 1000
+    batch_size: 10
+    timeout: 30  # seconds
+  monitoring:
+    health_check_interval: 300  # seconds
+    metrics_enabled: true
+    debug_mode: false
+
+# Connector configurations (global settings)
+connectors:
+  wazuh:
+    enabled: true
+    file_monitoring: true
+    buffer_size: 8192
+  qradar:
+    enabled: true  # Global enable/disable for QRadar connector type
+
+# Multi-tenant configuration
 tenants:
   tenant1:
-    name: "Empresa A"
-    token: "YOUR_TENANT1_TOKEN"
+    name: "Securesoft"
+    token: "eyJhbGciOiJIUzUxMiJ9.eyJjb21wYW55X2lkIjo1MCwidmVuZG9yX2lkIjoiSU5PUExJX0NPUlJFTEFUT1IiLCJzdWIiOiIxNDgiLCJpYXQiOjE3NTE5MDgyMzEsImV4cCI6MTgzODMwODIzMX0.uX1p0oNrjKeTDAKcJBgxDpZLAgA0ZL3Gnv49RW-wDpzvNLz7f8QT1gRpNzzB17uQE--JiWGTSBLygnIwc-egPg"
+
+    # Legacy datasources (for backward compatibility)
     data_sources:
       - name: "linux_auth"
         path: "/var/log/auth.log"
@@ -19,9 +47,9 @@ tenants:
 
       - name: "wazuh_alerts"
         path: "/var/ossec/logs/alerts/alerts.json"
-        enabled: true
+        enabled: false
         module: "wazuh_file"
-        event_types: [100001, 100002, 81633]  # IDs que devem ser permitidos
+        event_types: [100001, 100002, 81633]
         filters:
           agent_ids: ["*"]
 
@@ -37,32 +65,31 @@ tenants:
         path: "/var/ossec/logs/alerts/alerts.json"
         enabled: false
         module: "wazuh_o365"
-        event_types: [91556]  # IDs que devem ser permitidos
+        event_types: [91556]
         filters:
           organization_ids: ["abcdefg"]
 
-  tenant2:
-    name: "Empresa B"
-    token: "YOUR_TENANT2_TOKEN"
-    data_sources:
-      - name: "linux"
-        path: "/var/log/auth.log"
-        enabled: false
-        module: "linux"
-        event_types: [1003, 1008, 1009]
-        filters: {}
-
-      - name: "wazuh_alerts"
-        path: "/var/ossec/logs/alerts/alerts.json"
-        enabled: false
-        module: "wazuh_file"
-        event_types: [100001, 100002, 100003]  # IDs que devem ser permitidos
-        filters:
-          agent_ids: ["001", "002"]
-
-      - name: "crowdstrike"
-        path: "/opt/logs/cs.log"
-        enabled: false
-        module: "crowdstrike"
-        event_types: []
-        filters: {}
+    # New middleware siem_sources
+    siem_sources:
+      qradar_prod:
+        enabled: true
+        module: "qradar"
+        connector_type: "qradar"
+        polling_interval: 1  # minutes between API calls
+        api_config:
+          base_url: "https://200.123.18.215"
+          auth_token: "282997ef-21b8-4844-b3cb-f68ef294f7b7"
+          api_version: "17"
+          verify_ssl: false
+        collection_control:
+          last_offense_id: 0
+          save_last_id: true
+          id_file_path: "config/qradar_prod_last_id.json"
+        batch_size: 100
+        status_filter: "OPEN"
+        rule_filters:
+          rule_ids: ["*"]
+          min_severity: 5
+        source_filters:
+          source_networks: ["*"]
+        alert_mode: "all"

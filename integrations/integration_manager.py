@@ -4,6 +4,7 @@ from cti.virustotal import VirusTotalIntegration
 from cti.abuseipdb import AbuseIPDBIntegration
 from cti.base import ThreatIntelligenceIntegration
 from cti.hybrid_analysis import HybridAnalysisIntegration
+from cti.taxii import TAXIIIntegration
 from integrations.field_mapping import FIELD_MAPPING, get_field_value
 from config.debug import DEBUG_MODE
 
@@ -11,6 +12,7 @@ INTEGRATION_CLASSES = {
     "virustotal": VirusTotalIntegration,
     "abuseipdb": AbuseIPDBIntegration,
     "hybrid_analysis": HybridAnalysisIntegration,
+    "taxii": TAXIIIntegration,
     # Add more integrations here
 }
 

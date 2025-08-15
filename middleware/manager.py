@@ -12,12 +12,14 @@ from middleware.connectors.qradar_connector import QRadarConnector
 
 class MiddlewareManager:
     
-    def __init__(self, config_path: str = "config/middleware_config.yaml"):
+    def __init__(self, config_path: str = "config/sources_config.yaml"):
         self.config_path = config_path
         self.connectors: Dict[str, SIEMConnector] = {}
         self.running = False
         self.thread = None
         self.tenants_config = {}
+        self.middleware_config = {}
+        self.connectors_config = {}
         
         if DEBUG_MODE:
             print("[DEBUG] MiddlewareManager initialized")
@@ -45,17 +47,23 @@ class MiddlewareManager:
         try:
             if not os.path.exists(self.config_path):
                 if DEBUG_MODE:
-                    print(f"[DEBUG] Middleware config not found: {self.config_path}")
+                    print(f"[DEBUG] Sources config not found: {self.config_path}")
                 return False
                 
             with open(self.config_path, "r") as f:
                 config = yaml.safe_load(f)
             
+            # Extract middleware configuration
+            self.middleware_config = config.get("middleware", {})
+            
+            # Extract connectors configuration
+            self.connectors_config = config.get("connectors", {})
+            
             # Extract tenants configuration
             self.tenants_config = config.get("tenants", {})
             
             if DEBUG_MODE:
-                print(f"[DEBUG] Loaded middleware config with {len(self.tenants_config)} tenants")
+                print(f"[DEBUG] Loaded sources config with {len(self.tenants_config)} tenants")
             
             return True
             
@@ -70,16 +78,13 @@ class MiddlewareManager:
                 description=str(e)
             )
             if DEBUG_MODE:
-                print(f"[ERROR] Failed to load middleware config: {e}")
+                print(f"[ERROR] Failed to load sources config: {e}")
             return False
     
     def create_connectors(self) -> bool:
         try:
             # Stop existing connectors
             self.stop_connectors()
-            
-            # Get global connector configurations
-            connector_configs = self._get_connector_configs()
             
             # Create connectors for each SIEM source instance in each tenant
             for tenant_id, tenant_config in self.tenants_config.items():
@@ -92,7 +97,7 @@ class MiddlewareManager:
                     connector_type = source_config.get("connector_type", source_name.split("_")[0])
                     
                     # Check if this connector type is globally enabled
-                    if not connector_configs.get(connector_type, {}).get("enabled", True):
+                    if not self.connectors_config.get(connector_type, {}).get("enabled", True):
                         if DEBUG_MODE:
                             print(f"[DEBUG] Skipping {source_name} - {connector_type} globally disabled")
                         continue
@@ -122,18 +127,6 @@ class MiddlewareManager:
             if DEBUG_MODE:
                 print(f"[ERROR] Failed to create connectors: {e}")
             return False
-    
-    def _get_connector_configs(self) -> Dict[str, Any]:
-        try:
-            with open(self.config_path, "r") as f:
-                config = yaml.safe_load(f)
-            
-            return config.get("connectors", {})
-            
-        except Exception as e:
-            if DEBUG_MODE:
-                print(f"[ERROR] Failed to load connector configs: {e}")
-            return {}
     
     def _create_connector(self, source_name: str, source_config: Dict[str, Any], tenant_id: str) -> SIEMConnector | None:
         try:

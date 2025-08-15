@@ -11,3 +11,19 @@ integrations:
     enabled: false
     api_key: "YOUR_HYBRID_ANALYSIS_API_KEY"
     fields: ["file_hash", "ip", "url"]
+  taxii:
+    enabled: false  # Set to true to activate
+    server_url: "https://your-taxii-server.com/"
+    collection_id: "YOUR_COLLECTION_ID"
+    # TAXII version (1.1 or 2.1)
+    taxii_version: "2.1"  # Use "1.1" for older TAXII servers
+    # Authentication options (choose one):
+    # Option 1: No authentication (for public TAXII servers)
+    no_auth: false  # Set to true for servers that don't require authentication
+    # Option 2: Username/password authentication
+    username: "YOUR_USERNAME"
+    password: "YOUR_PASSWORD"
+    # Option 3: API key authentication
+    # api_key: "YOUR_API_KEY"
+    timeout: 30
+    fields: ["ip", "domain", "file_hash", "url"]

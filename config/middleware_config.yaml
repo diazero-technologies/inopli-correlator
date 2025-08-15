@@ -36,6 +36,7 @@ tenants:
     siem_sources:
       wazuh:
         enabled: true
+        module: "wazuh"
         file_path: "/var/ossec/logs/alerts/alerts.json"
         rule_filters:
           # Send all alerts with wildcard
@@ -52,6 +53,7 @@ tenants:
       # QRadar instance 1 - Production environment
       qradar_prod:
         enabled: true
+        module: "qradar"
         connector_type: "qradar"  # Specify the connector type
         polling_interval: 5  # minutes between API calls
         api_config:
@@ -70,8 +72,14 @@ tenants:
         batch_size: 100
         status_filter: "OPEN"  # OPEN, CLOSED, ALL
         rule_filters:
-          # Filter only "Firewall Permit" offenses
-          rule_ids: ["Firewall Permit"]
+          # Filter by description patterns (QRadar uses description as rule_id)
+          # Use partial string matching - any rule_id in this list will match if found in description
+          rule_ids: ["AZUREAD", "MALWARE", "EDR", "Firewall"]
+          # Examples of what will match:
+          # - "SS-PE-SSO-CU-AZUREAD-LOGIN SATISFACTORIO DESDE ORIGEN MALICIOSO" (contains "AZUREAD")
+          # - "SS-PE-SSO-CU-DETECCION RECURRENTE DE MALWARE" (contains "MALWARE")
+          # - "SS-PE-SSO-CU-AMENAZA DETECTADA EN HOST POR EDR" (contains "EDR")
+          # - "[SEC] - CSS - Conexiones sospechosas salientes - Firewall" (contains "Firewall")
           min_severity: 5  # Minimum severity level (0-10)
         source_filters:
           # Send from all source networks with wildcard
@@ -83,6 +91,7 @@ tenants:
       # QRadar instance 2 - Development environment
       qradar_dev:
         enabled: true
+        module: "qradar"
         connector_type: "qradar"  # Specify the connector type
         polling_interval: 10  # minutes between API calls
         api_config:
@@ -113,6 +122,7 @@ tenants:
     siem_sources:
       wazuh:
         enabled: false
+        module: "wazuh"
         file_path: "/var/ossec/logs/alerts/alerts.json"
         rule_filters:
           rule_ids: [100001, 100002, 100003]
@@ -123,6 +133,7 @@ tenants:
       # QRadar instance for tenant2
       qradar_main:
         enabled: true
+        module: "qradar"
         connector_type: "qradar"
         polling_interval: 15  # minutes between API calls
         api_config:
@@ -141,7 +152,8 @@ tenants:
         batch_size: 50
         status_filter: "OPEN"
         rule_filters:
-          rule_ids: [100100, 100102, 100232]
+          # Filter by specific description patterns for tenant2
+          rule_ids: ["SS-PE-SSO-CU", "VPN", "SUSPICIOUS"]
           min_severity: 7
         source_filters:
           source_networks: ["Vlan_25_Lab_Ingenieria.Vlan_25_Lab_Ingenieria"]
