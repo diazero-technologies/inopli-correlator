@@ -19,6 +19,12 @@ class TAXIIIntegration(ThreatIntelligenceIntegration):
         self.no_auth = config.get("no_auth", False)
         self.taxii_version = config.get("taxii_version", "2.1")  # Default to 2.1, can be 1.1
         
+        # SSL Configuration
+        self.verify_ssl = config.get("verify_ssl", True)
+        ssl_config = config.get("ssl_config", {})
+        self.verify_cert = ssl_config.get("verify_cert", True)
+        self.custom_cert_path = ssl_config.get("custom_cert_path")
+        
         # Validate required configuration
         if not self.server_url:
             raise ValueError("TAXII server URL is required in config.")
@@ -133,7 +139,8 @@ class TAXIIIntegration(ThreatIntelligenceIntegration):
                 headers=self._headers(), 
                 auth=self._auth(),
                 params=query_data,
-                timeout=self.timeout
+                timeout=self.timeout,
+                verify=self.verify_ssl and self.verify_cert
             )
             
             if resp.status_code != 200:
@@ -199,7 +206,8 @@ class TAXIIIntegration(ThreatIntelligenceIntegration):
                 headers=self._headers(),
                 auth=self._auth(),
                 data=poll_request_xml,
-                timeout=self.timeout
+                timeout=self.timeout,
+                verify=self.verify_ssl and self.verify_cert
             )
             
             if resp.status_code != 200:
@@ -207,11 +215,43 @@ class TAXIIIntegration(ThreatIntelligenceIntegration):
                     print(f"[DEBUG] TAXII 1.1 query failed: {resp.status_code} {resp.text}")
                 return None
             
-            # TAXII 1.1 returns XML, would need XML parsing here
-            # For now, return None as TAXII 1.1 implementation is complex
-            if DEBUG_MODE:
-                print(f"[DEBUG] TAXII 1.1 response received, but XML parsing not implemented")
-            return None
+            # TAXII 1.1 returns XML - implement basic XML parsing for indicators
+            try:
+                import xml.etree.ElementTree as ET
+                root = ET.fromstring(resp.text)
+                
+                # Look for STIX indicators in the XML response
+                indicators = []
+                for indicator_elem in root.findall('.//{*}Indicator'):
+                    indicator_id = indicator_elem.get('id')
+                    if indicator_id:
+                        indicators.append({
+                            'id': indicator_id,
+                            'type': 'indicator',
+                            'name': indicator_elem.get('name', ''),
+                            'description': indicator_elem.get('description', ''),
+                            'pattern': indicator_elem.get('pattern', ''),
+                            'valid_from': indicator_elem.get('valid_from', ''),
+                            'valid_until': indicator_elem.get('valid_until', ''),
+                            'confidence': indicator_elem.get('confidence', ''),
+                            'severity': indicator_elem.get('severity', ''),
+                            'labels': [],
+                            'external_references': []
+                        })
+                
+                if DEBUG_MODE:
+                    print(f"[DEBUG] TAXII 1.1 parsed {len(indicators)} indicators from XML")
+                
+                if indicators:
+                    return self._process_taxii_results(field_type, value, indicators)
+                else:
+                    return None
+                    
+            except Exception as e:
+                if DEBUG_MODE:
+                    print(f"[DEBUG] TAXII 1.1 XML parsing failed: {e}")
+                    print(f"[DEBUG] Response content: {resp.text[:500]}...")
+                return None
             
         except requests.exceptions.RequestException as e:
             if DEBUG_MODE:
@@ -296,7 +336,8 @@ class TAXIIIntegration(ThreatIntelligenceIntegration):
                 url,
                 headers=self._headers(),
                 auth=self._auth(),
-                timeout=self.timeout
+                timeout=self.timeout,
+                verify=self.verify_ssl and self.verify_cert
             )
             
             if resp.status_code == 200:
@@ -325,14 +366,37 @@ class TAXIIIntegration(ThreatIntelligenceIntegration):
                 headers=self._headers(),
                 auth=self._auth(),
                 data=collection_request_xml,
-                timeout=self.timeout
+                timeout=self.timeout,
+                verify=self.verify_ssl and self.verify_cert
             )
             
             if resp.status_code == 200:
-                # TAXII 1.1 returns XML, would need XML parsing here
-                if DEBUG_MODE:
-                    print(f"[DEBUG] TAXII 1.1 collections response received, but XML parsing not implemented")
-                return []
+                # TAXII 1.1 returns XML - implement basic XML parsing
+                try:
+                    import xml.etree.ElementTree as ET
+                    root = ET.fromstring(resp.text)
+                    
+                    # Look for collections in the XML response
+                    collections = []
+                    # Common TAXII 1.1 collection elements
+                    for collection_elem in root.findall('.//{*}Collection'):
+                        collection_id = collection_elem.get('collection_name') or collection_elem.get('name')
+                        if collection_id:
+                            collections.append({
+                                'id': collection_id,
+                                'title': collection_id,
+                                'description': collection_elem.get('description', '')
+                            })
+                    
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] TAXII 1.1 parsed {len(collections)} collections from XML")
+                    
+                    return collections
+                except Exception as e:
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] TAXII 1.1 XML parsing failed: {e}")
+                        print(f"[DEBUG] Response content: {resp.text[:500]}...")
+                    return []
             else:
                 if DEBUG_MODE:
                     print(f"[DEBUG] Failed to get TAXII 1.1 collections: {resp.status_code}")

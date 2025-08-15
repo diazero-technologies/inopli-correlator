@@ -12,7 +12,7 @@ class TestVirusTotalIntegration(unittest.TestCase):
         mock_get.return_value = Mock(status_code=200, json=lambda: {
             "data": {"attributes": {"last_analysis_stats": {"malicious": 2, "suspicious": 0}, "reputation": -10, "country": "RU", "tags": ["botnet"]}}
         })
-        result = self.vt.query("ip", "110.34.2.94")
+        result = self.vt.query("ip", "8.8.8.8")
         self.assertIsNotNone(result)
         if result:
             self.assertTrue(result["threat"])

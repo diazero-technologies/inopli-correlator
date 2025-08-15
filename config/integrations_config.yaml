@@ -26,4 +26,9 @@ integrations:
     # Option 3: API key authentication
     # api_key: "YOUR_API_KEY"
     timeout: 30
+    # SSL Configuration
+    verify_ssl: true  # Set to false to bypass SSL certificate validation
+    ssl_config:
+      verify_cert: true  # Set to false to bypass certificate verification
+      custom_cert_path: null  # Path to custom CA certificate if needed
     fields: ["ip", "domain", "file_hash", "url"]
