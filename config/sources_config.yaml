@@ -27,7 +27,7 @@ connectors:
 tenants:
   tenant1:
     name: "Securesoft"
-    token: "eyJhbGciOiJIUzUxMiJ9.eyJjb21wYW55X2lkIjo1MCwidmVuZG9yX2lkIjoiSU5PUExJX0NPUlJFTEFUT1IiLCJzdWIiOiIxNDgiLCJpYXQiOjE3NTE5MDgyMzEsImV4cCI6MTgzODMwODIzMX0.uX1p0oNrjKeTDAKcJBgxDpZLAgA0ZL3Gnv49RW-wDpzvNLz7f8QT1gRpNzzB17uQE--JiWGTSBLygnIwc-egPg"
+    token: "CODE"
 
     # Legacy datasources (for backward compatibility)
     data_sources:
