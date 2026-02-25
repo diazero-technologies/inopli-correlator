@@ -47,7 +47,7 @@ Configure your data sources and tenants:
 tenants:
   tenant1:
     name: "Company A"
-    token: "your-tenant-token"
+    token: "YOUR_INOPLI_TOKEN_HERE"
     data_sources:
       - name: "linux_auth"
         path: "/var/log/auth.log"

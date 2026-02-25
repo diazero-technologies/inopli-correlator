@@ -181,6 +181,9 @@ class AlertProcessor:
                         return rules[0].get("name", "Unknown Rule")
                     else:
                         return "Unknown Rule"
+            elif module == "arcsight":
+                # ArcSight usa o atributo 'name' do SecurityEvent como detection_rule_id
+                return alert.get("detection_rule_id")
             elif module == "crowdstrike":
                 # CrowdStrike specific rule ID extraction
                 return alert.get("detection_rule_id")
@@ -232,6 +235,29 @@ class AlertProcessor:
                         offense_source_network = alert.get("source_network", "")
                         if "*" not in allowed_source_networks and offense_source_network not in allowed_source_networks:
                             continue
+                        token = tenant_data.get("token")
+                        alert_mode = src_config.get("alert_mode", "all")
+                        if token:
+                            tenant_matches.append((tenant_id, token, alert_mode))
+                    # ArcSight
+                    elif module == "arcsight":
+                        rule_filters = src_config.get("rule_filters", {})
+                        allowed_rule_ids = rule_filters.get("rule_ids", ["*"])
+                        
+                        # Wildcard ou match exato/parcial
+                        if "*" not in allowed_rule_ids:
+                            if not any(allowed_rule in rule_id for allowed_rule in allowed_rule_ids):
+                                continue
+                        
+                        # Filtro de severidade
+                        min_severity = rule_filters.get("min_severity", 0)
+                        if min_severity > 0:
+                            alert_severity_map = {"Low": 1, "Medium": 2, "High": 3, "VeryHigh": 4}
+                            alert_severity = alert_severity_map.get(alert.get("agentSeverity", "Low"), 1)
+                            
+                            if alert_severity < min_severity:
+                                continue
+                        
                         token = tenant_data.get("token")
                         alert_mode = src_config.get("alert_mode", "all")
                         if token:

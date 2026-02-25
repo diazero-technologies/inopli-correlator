@@ -8,6 +8,7 @@ from config.debug import DEBUG_MODE
 from middleware.base import SIEMConnector
 from middleware.connectors.wazuh_connector import WazuhConnector
 from middleware.connectors.qradar_connector import QRadarConnector
+from middleware.connectors.arcsight_connector import ArcSightConnector
 
 
 class MiddlewareManager:
@@ -155,6 +156,20 @@ class MiddlewareManager:
                     "tenant_config": self.tenants_config.get(tenant_id, {})
                 }
                 return QRadarConnector(source_name, connector_config)
+            
+            elif connector_type == "arcsight":
+                # Create ArcSight connector with source-specific configuration
+                connector_config = {
+                    "enabled": source_config.get("enabled", False),
+                    "polling_interval": source_config.get("polling_interval", 5),
+                    "directory_path": source_config.get("directory_path", ""),
+                    "file_pattern": source_config.get("file_pattern", "*.xml"),
+                    "tenant_id": tenant_id,
+                    "tenant_config": self.tenants_config.get(tenant_id, {}),
+                    "rule_filters": source_config.get("rule_filters", {}),
+                    "parse_options": source_config.get("parse_options", {})
+                }
+                return ArcSightConnector(source_name, connector_config)
             
             # Add more connector types here as needed
             # elif connector_type == "crowdstrike":

@@ -22,12 +22,15 @@ connectors:
     buffer_size: 8192
   qradar:
     enabled: true  # Global enable/disable for QRadar connector type
+  arcsight:
+    enabled: true  # Global enable/disable for ArcSight connector type
+    file_monitoring: true
 
 # Multi-tenant configuration
 tenants:
   tenant1:
-    name: "Securesoft"
-    token: "eyJhbGciOiJIUzUxMiJ9.eyJjb21wYW55X2lkIjo1MCwidmVuZG9yX2lkIjoiSU5PUExJX0NPUlJFTEFUT1IiLCJzdWIiOiIxNDgiLCJpYXQiOjE3NTE5MDgyMzEsImV4cCI6MTgzODMwODIzMX0.uX1p0oNrjKeTDAKcJBgxDpZLAgA0ZL3Gnv49RW-wDpzvNLz7f8QT1gRpNzzB17uQE--JiWGTSBLygnIwc-egPg"
+    name: "Tenant Example"
+    token: "YOUR_INOPLI_TOKEN_HERE"
 
     # Legacy datasources (for backward compatibility)
     data_sources:
@@ -77,8 +80,8 @@ tenants:
         connector_type: "qradar"
         polling_interval: 1  # minutes between API calls
         api_config:
-          base_url: "https://200.123.18.215"
-          auth_token: "282997ef-21b8-4844-b3cb-f68ef294f7b7"
+          base_url: "https://your-qradar-server.com"
+          auth_token: "YOUR_QRADAR_AUTH_TOKEN"
           api_version: "17"
           verify_ssl: false
         collection_control:
@@ -93,3 +96,23 @@ tenants:
         source_filters:
           source_networks: ["*"]
         alert_mode: "all"
+      
+      arcsight_prod:
+        enabled: false  # Set to true to activate
+        module: "arcsight"
+        connector_type: "arcsight"
+        directory_path: "C:/path/to/arcsight/export"  # Windows path or /var/arcsight/export for Linux
+        file_pattern: "*.xml"  # Monitor all XML files
+        polling_interval: 5  # Seconds between health checks
+        
+        parse_options:
+          preserve_nested: true  # Keep nested structure like agent.address
+          include_flat_fields: true  # Also include flat fields like agentAddress
+          encoding: "UTF-8"
+          max_file_size_mb: 100  # Skip files larger than this
+        
+        rule_filters:
+          rule_ids: ["*"]  # Wildcard accepts all, or ["INOPLI - Brute Force", "INOPLI - Suspicious"]
+          min_severity: 2  # 1=Low, 2=Medium, 3=High, 4=VeryHigh
+        
+        alert_mode: "all"  # all | cti_only | none
