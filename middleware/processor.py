@@ -1,5 +1,6 @@
 from typing import Dict, List, Any, Optional
 import threading
+import os
 from utils.event_logger import log_event
 from utils.webhook_sender import send_to_inopli
 from integrations.integration_manager import IntegrationManager
@@ -207,6 +208,12 @@ class AlertProcessor:
                 module = src_config.get("module", src_name)
                 # Match by source_name for agent/source_id, but by module for logic
                 if src_name == source_name:
+                    # Token resolution:
+                    # - Prefer tenant-specific token from config
+                    # - Fallback to environment variable INOPLI_TOKEN (useful on Windows/services)
+                    token = tenant_data.get("token")
+                    if not token:
+                        token = os.environ.get("INOPLI_TOKEN")
                     # Wazuh
                     if module == "wazuh":
                         rule_filters = src_config.get("rule_filters", {})
@@ -219,7 +226,6 @@ class AlertProcessor:
                         agent_id = agent.get("id")
                         if "*" not in allowed_agent_ids and agent_id not in allowed_agent_ids:
                             continue
-                        token = tenant_data.get("token")
                         alert_mode = src_config.get("alert_mode", "all")
                         if token:
                             tenant_matches.append((tenant_id, token, alert_mode))
@@ -235,7 +241,6 @@ class AlertProcessor:
                         offense_source_network = alert.get("source_network", "")
                         if "*" not in allowed_source_networks and offense_source_network not in allowed_source_networks:
                             continue
-                        token = tenant_data.get("token")
                         alert_mode = src_config.get("alert_mode", "all")
                         if token:
                             tenant_matches.append((tenant_id, token, alert_mode))
@@ -258,7 +263,6 @@ class AlertProcessor:
                             if alert_severity < min_severity:
                                 continue
                         
-                        token = tenant_data.get("token")
                         alert_mode = src_config.get("alert_mode", "all")
                         if token:
                             tenant_matches.append((tenant_id, token, alert_mode))

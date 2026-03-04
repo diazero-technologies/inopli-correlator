@@ -38,10 +38,10 @@ def main():
 
     print(f"[INFO] Created {len(middleware_manager.connectors)} middleware connectors")
 
-    # Start middleware manager and connectors
+    # Start connectors first to avoid race with manager restart loop
+    middleware_manager.start_connectors()
     print("[INFO] Starting middleware manager...")
     middleware_manager.start()
-    middleware_manager.start_connectors()
 
     # Keep the process alive
     print("[INFO] Inopli correlator with middleware running indefinitely. Press Ctrl+C to stop.")

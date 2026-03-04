@@ -1,2 +1,3 @@
 /.venv/
 infoinopli/*.xml
+/logs/

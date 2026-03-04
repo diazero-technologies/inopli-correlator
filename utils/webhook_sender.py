@@ -1,20 +1,24 @@
 # utils/webhook_sender.py
 
 import os
+import json
 import requests
 from config.debug import DEBUG_MODE
 
+
 def send_to_inopli(payload, token_override=None):
-    url = os.environ.get("INOPLI_WEBHOOK_URL", "https://api.inopli.com/alerts")
+    base_url = os.environ.get("INOPLI_WEBHOOK_URL", "https://api.inopli.com/send")
     token = token_override or os.environ.get("INOPLI_TOKEN")
     if not token:
         raise ValueError("No Inopli token provided.")
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    # Token is sent as query parameter, as required by the Inopli API
+    url = f"{base_url}?token={token}"
+    headers = {"Content-Type": "application/json"}
+
     try:
-        import json
         data = json.dumps(payload)
-        verify_ssl = not DEBUG_MODE
-        resp = requests.post(url, headers=headers, data=data, timeout=15, verify=verify_ssl)
+        resp = requests.post(url, headers=headers, data=data, timeout=15, verify=True)
         resp.raise_for_status()
         if DEBUG_MODE:
             print(f"[INFO] Sent alert to Inopli: {resp.status_code}")

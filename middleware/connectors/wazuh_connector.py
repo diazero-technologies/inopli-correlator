@@ -261,7 +261,8 @@ class WazuhConnector(SIEMConnector):
             return False
 
     def start(self):
-        if not super().start():
+        super().start()
+        if not self.running:
             return
             
         try:

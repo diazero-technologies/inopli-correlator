@@ -452,7 +452,8 @@ class ArcSightConnector(SIEMConnector):
     
     def start(self):
         """Inicia watchdog observer para monitorar diretório"""
-        if not super().start():
+        super().start()
+        if not self.running:
             return
         
         try:
