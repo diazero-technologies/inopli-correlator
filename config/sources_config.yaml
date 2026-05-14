@@ -25,6 +25,8 @@ connectors:
   arcsight:
     enabled: true  # Global enable/disable for ArcSight connector type
     file_monitoring: true
+  datadog:
+    enabled: true  # Global enable/disable for Datadog connector type
 
 # Multi-tenant configuration
 tenants:
@@ -116,3 +118,26 @@ tenants:
           min_severity: 2  # 1=Low, 2=Medium, 3=High, 4=VeryHigh
         
         alert_mode: "all"  # all | cti_only | none
+
+      datadog_prod:
+        enabled: false  # Set to true to activate
+        module: "datadog"
+        connector_type: "datadog"
+        polling_interval: 5  # Minutes between API calls
+        # States considered actionable; Datadog values: Alert, Warn, No Data, OK, Skipped, Unknown, Ignored
+        alert_states: ["Alert", "Warn"]
+        api_config:
+          base_url: "https://api.datadoghq.com"  # US1; adjust for other sites (e.g. https://api.datadoghq.eu)
+          api_key: "YOUR_DD_API_KEY"
+          app_key: "YOUR_DD_APP_KEY"
+          # Optional: pre-filter monitors by tag at the API level to reduce payload size
+          # monitor_tags_filter: "env:prod,team:security"
+        collection_control:
+          save_state: true
+          state_file_path: "config/datadog_prod_state.json"
+        batch_size: 100  # Monitors per API page (max 100 for Datadog)
+        rule_filters:
+          rule_ids: ["*"]              # Substring match on monitor name; "*" = accept all
+          monitor_tags: []             # Must have at least one of these tags; [] = accept all
+          min_severity: 0              # Minimum severity (1-5); 0 = accept all
+        alert_mode: "all"              # all | cti_only | none

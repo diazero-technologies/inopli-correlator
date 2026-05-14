@@ -185,6 +185,9 @@ class AlertProcessor:
             elif module == "arcsight":
                 # ArcSight usa o atributo 'name' do SecurityEvent como detection_rule_id
                 return alert.get("detection_rule_id")
+            elif module == "datadog":
+                # Datadog uses monitor name as the rule identifier
+                return alert.get("name", "Unknown Monitor")
             elif module == "crowdstrike":
                 # CrowdStrike specific rule ID extraction
                 return alert.get("detection_rule_id")
@@ -266,6 +269,34 @@ class AlertProcessor:
                         alert_mode = src_config.get("alert_mode", "all")
                         if token:
                             tenant_matches.append((tenant_id, token, alert_mode))
+                    # Datadog
+                    elif module == "datadog":
+                        rule_filters = src_config.get("rule_filters", {})
+                        allowed_rule_ids = rule_filters.get("rule_ids", ["*"])
+
+                        # Monitor name substring filter
+                        if "*" not in allowed_rule_ids:
+                            monitor_name = alert.get("name", "")
+                            if not any(r in monitor_name for r in allowed_rule_ids):
+                                continue
+
+                        # Monitor tags filter
+                        allowed_tags = rule_filters.get("monitor_tags", [])
+                        if allowed_tags:
+                            alert_tags = alert.get("tags", [])
+                            if not any(t in alert_tags for t in allowed_tags):
+                                continue
+
+                        # Minimum severity filter
+                        min_severity = rule_filters.get("min_severity", 0)
+                        if min_severity > 0:
+                            if alert.get("severity", 0) < min_severity:
+                                continue
+
+                        alert_mode = src_config.get("alert_mode", "all")
+                        if token:
+                            tenant_matches.append((tenant_id, token, alert_mode))
+
                     # Outros módulos podem ser adicionados aqui
         return tenant_matches
     

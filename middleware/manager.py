@@ -9,6 +9,7 @@ from middleware.base import SIEMConnector
 from middleware.connectors.wazuh_connector import WazuhConnector
 from middleware.connectors.qradar_connector import QRadarConnector
 from middleware.connectors.arcsight_connector import ArcSightConnector
+from middleware.connectors.datadog_connector import DatadogConnector
 
 
 class MiddlewareManager:
@@ -170,7 +171,22 @@ class MiddlewareManager:
                     "parse_options": source_config.get("parse_options", {})
                 }
                 return ArcSightConnector(source_name, connector_config)
-            
+
+            elif connector_type == "datadog":
+                # Create Datadog connector with source-specific configuration
+                connector_config = {
+                    "enabled": source_config.get("enabled", False),
+                    "polling_interval": source_config.get("polling_interval", 5),
+                    "api_config": source_config.get("api_config", {}),
+                    "collection_control": source_config.get("collection_control", {}),
+                    "alert_states": source_config.get("alert_states", ["Alert", "Warn"]),
+                    "batch_size": source_config.get("batch_size", 100),
+                    "rule_filters": source_config.get("rule_filters", {}),
+                    "tenant_id": tenant_id,
+                    "tenant_config": self.tenants_config.get(tenant_id, {})
+                }
+                return DatadogConnector(source_name, connector_config)
+
             # Add more connector types here as needed
             # elif connector_type == "crowdstrike":
             #     return CrowdStrikeConnector(source_name, connector_config)
