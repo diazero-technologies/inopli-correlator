@@ -10,33 +10,45 @@ from middleware.base import SIEMConnector
 from utils.event_logger import log_event
 from config.debug import DEBUG_MODE
 
+# State file schema version.  Bump when the on-disk format changes.
+_STATE_VERSION = 2
+
 
 class DatadogConnector(SIEMConnector):
     """
     Polls the Datadog Monitors API and forwards triggered monitors
-    (state Alert or Warn) to the Inopli AlertProcessor.
+    (state Alert or Warn by default) to the Inopli AlertProcessor.
 
-    Deduplication is done via a per-monitor state file that stores the
-    maximum last_triggered_ts seen for each monitor ID.  A monitor is
-    only forwarded again when its last_triggered_ts increases.
+    --- Deduplication strategy ---
+    The Datadog monitor list endpoint always returns 'overall_state_modified'
+    (an ISO-8601 timestamp that changes every time the monitor transitions to
+    a new state).  This field is used as the deduplication key:
 
-    Authentication uses two Datadog credentials:
-      DD-API-KEY   → api_config.api_key
-      DD-APPLICATION-KEY → api_config.app_key
+      • A monitor is forwarded when its overall_state_modified timestamp is
+        NEWER than what was last saved for that monitor ID.
+      • ALL seen monitors are written to the state file — including those
+        currently in a non-alert state — so that a future OK→Alert transition
+        is correctly detected as a new trigger.
+      • The state file (JSON, v2) stores per-monitor:
+          name, overall_state, state_modified_ts, state_modified_raw,
+          last_sent_at, send_count
+        providing a full audit trail and making debugging trivial.
 
-    Polling interval is expressed in minutes (same convention as
-    QRadarConnector).
+    --- Authentication ---
+      DD-API-KEY          → api_config.api_key
+      DD-APPLICATION-KEY  → api_config.app_key
+
+    --- Polling interval ---
+    Expressed in minutes, same convention as QRadarConnector.
     """
 
-    # States that are considered actionable alerts
     ALERT_STATES = {"Alert", "Warn"}
 
-    # Datadog priority → internal severity (1 = critical → 5, 5 = low → 1)
     def _map_severity(self, priority: Optional[int]) -> int:
+        """Datadog priority 1 (critical) → severity 5; priority 5 (low) → severity 1."""
         if priority is None:
             return 3
-        clamped = max(1, min(5, int(priority)))
-        return 6 - clamped
+        return 6 - max(1, min(5, int(priority)))
 
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
@@ -47,17 +59,17 @@ class DatadogConnector(SIEMConnector):
         self.alert_states = set(config.get("alert_states", list(self.ALERT_STATES)))
         self.last_collection_time = None
         self.session = requests.Session()
-
-        # State: {str(monitor_id): int(max_last_triggered_ts)}
-        self.monitor_state: Dict[str, int] = self._load_state()
         self._state_lock = threading.Lock()
+
+        # {str(monitor_id): MonitorStateEntry dict}
+        self.monitor_state: Dict[str, Dict] = self._load_state()
 
         if DEBUG_MODE:
             print(
-                f"[DEBUG] Initializing DatadogConnector for '{name}' "
-                f"with tenant {self.tenant_id}"
+                f"[DEBUG] DatadogConnector '{name}' initialised "
+                f"(tenant={self.tenant_id}, "
+                f"tracked_monitors={len(self.monitor_state)})"
             )
-            print(f"[DEBUG] Loaded state for {len(self.monitor_state)} monitors")
 
     # ------------------------------------------------------------------
     # SIEMConnector interface
@@ -66,32 +78,30 @@ class DatadogConnector(SIEMConnector):
     def connect(self) -> bool:
         """Validate credentials via GET /api/v1/validate."""
         try:
-            url = f"{self.api_config['base_url']}/api/v1/validate"
-            response = self.session.get(
-                url,
+            r = self.session.get(
+                f"{self.api_config['base_url']}/api/v1/validate",
                 headers=self._get_auth_headers(),
                 timeout=10,
             )
-            if response.status_code == 200:
+            if r.status_code == 200:
                 if DEBUG_MODE:
-                    print(f"[DEBUG] DatadogConnector: credentials validated for {self.name}")
+                    print(f"[DEBUG] DatadogConnector: credentials OK for '{self.name}'")
                 return True
-            else:
-                if DEBUG_MODE:
-                    print(
-                        f"[ERROR] DatadogConnector: validation failed for {self.name}. "
-                        f"Status: {response.status_code} – {response.text[:200]}"
-                    )
-                log_event(
-                    event_id=997,
-                    solution_name="inopli_middleware",
-                    data_source=self.name,
-                    class_name="DatadogConnector",
-                    method="connect",
-                    event_type="error",
-                    description=f"HTTP {response.status_code}: {response.text[:200]}",
+            if DEBUG_MODE:
+                print(
+                    f"[ERROR] DatadogConnector: validation failed "
+                    f"(HTTP {r.status_code}) for '{self.name}'"
                 )
-                return False
+            log_event(
+                event_id=997,
+                solution_name="inopli_middleware",
+                data_source=self.name,
+                class_name="DatadogConnector",
+                method="connect",
+                event_type="error",
+                description=f"HTTP {r.status_code}: {r.text[:200]}",
+            )
+            return False
         except Exception as e:
             if DEBUG_MODE:
                 print(f"[ERROR] DatadogConnector.connect: {e}")
@@ -108,13 +118,12 @@ class DatadogConnector(SIEMConnector):
 
     def collect_alerts(self) -> List[Dict[str, Any]]:
         """
-        Fetches all monitors from the Datadog API (paginated), keeps only
-        those whose overall_state is in self.alert_states, and deduplicates
-        by last_triggered_ts.
+        Fetches monitors from the Datadog API (paginated), keeps only those
+        whose overall_state is in self.alert_states, and deduplicates via
+        overall_state_modified.
         """
         if DEBUG_MODE:
-            print(f"[DEBUG] DatadogConnector.collect_alerts: starting for {self.name}")
-
+            print(f"[DEBUG] DatadogConnector.collect_alerts: starting for '{self.name}'")
         alerts: List[Dict[str, Any]] = []
         try:
             alerts = self._collect_triggered_monitors()
@@ -132,56 +141,58 @@ class DatadogConnector(SIEMConnector):
                 print(f"[ERROR] DatadogConnector.collect_alerts: {e}")
                 import traceback
                 traceback.print_exc()
-
         if DEBUG_MODE:
             print(
-                f"[DEBUG] DatadogConnector.collect_alerts: returning {len(alerts)} alerts"
+                f"[DEBUG] DatadogConnector.collect_alerts: "
+                f"returning {len(alerts)} alert(s)"
             )
         return alerts
 
     def validate_alert(self, alert: Dict[str, Any]) -> bool:
         """
-        Validates that the alert belongs to this connector's tenant and
-        passes all configured rule/tag/severity filters.
+        Checks tenant ownership and applies optional rule/tag/severity
+        filters defined in the YAML config.
         """
         if alert.get("_tenant_id") != self.tenant_id:
             return False
 
         rule_filters = self.config.get("rule_filters", {})
-        if rule_filters:
-            # Monitor name substring filter (equivalent to QRadar rule_ids)
-            rule_ids_filter = rule_filters.get("rule_ids", ["*"])
-            if rule_ids_filter and rule_ids_filter != ["*"]:
-                monitor_name = alert.get("name", "")
-                if not any(r in monitor_name for r in rule_ids_filter):
-                    if DEBUG_MODE:
-                        print(
-                            f"[DEBUG] DatadogConnector: rule filter rejected "
-                            f"'{monitor_name[:60]}'"
-                        )
-                    return False
+        if not rule_filters:
+            return True
 
-            # Monitor tags filter
-            allowed_tags = rule_filters.get("monitor_tags", [])
-            if allowed_tags:
-                alert_tags = alert.get("tags", [])
-                if not any(t in alert_tags for t in allowed_tags):
-                    if DEBUG_MODE:
-                        print(
-                            f"[DEBUG] DatadogConnector: tag filter rejected "
-                            f"tags {alert_tags}"
-                        )
-                    return False
-
-            # Minimum severity filter
-            min_severity = rule_filters.get("min_severity", 0)
-            if min_severity > 0 and alert.get("severity", 0) < min_severity:
+        # Monitor name substring filter  (rule_ids: ["*"] = accept all)
+        allowed_ids = rule_filters.get("rule_ids", ["*"])
+        if allowed_ids and allowed_ids != ["*"]:
+            name = alert.get("name", "")
+            if not any(r in name for r in allowed_ids):
                 if DEBUG_MODE:
                     print(
-                        f"[DEBUG] DatadogConnector: severity filter rejected "
-                        f"severity={alert.get('severity', 0)} < min={min_severity}"
+                        f"[DEBUG] DatadogConnector.validate_alert: "
+                        f"rule_ids filter rejected '{name[:60]}'"
                     )
                 return False
+
+        # Monitor tags filter  (empty list = accept all)
+        allowed_tags = rule_filters.get("monitor_tags", [])
+        if allowed_tags:
+            alert_tags = alert.get("tags") or []
+            if not any(t in alert_tags for t in allowed_tags):
+                if DEBUG_MODE:
+                    print(
+                        f"[DEBUG] DatadogConnector.validate_alert: "
+                        f"monitor_tags filter rejected tags={alert_tags}"
+                    )
+                return False
+
+        # Minimum severity filter  (0 = accept all)
+        min_sev = rule_filters.get("min_severity", 0)
+        if min_sev > 0 and alert.get("severity", 0) < min_sev:
+            if DEBUG_MODE:
+                print(
+                    f"[DEBUG] DatadogConnector.validate_alert: "
+                    f"min_severity filter rejected severity={alert.get('severity', 0)}"
+                )
+            return False
 
         return True
 
@@ -191,22 +202,27 @@ class DatadogConnector(SIEMConnector):
             self.session.close()
 
     # ------------------------------------------------------------------
-    # Internal collection helpers
+    # Internal collection
     # ------------------------------------------------------------------
 
     def _collect_triggered_monitors(self) -> List[Dict[str, Any]]:
         """
-        Pages through GET /api/v1/monitor, collects monitors whose
-        overall_state is in alert_states, and deduplicates using the
-        per-monitor last_triggered_ts state file.
+        Pages through GET /api/v1/monitor.
+
+        For every monitor seen this cycle:
+          • Updates the state entry (state + state_modified_ts) regardless
+            of whether the monitor is currently alerting.  This ensures that
+            a future transition back into an alert state is always caught.
+          • Forwards the monitor to AlertProcessor only when:
+              1. overall_state is in self.alert_states, AND
+              2. state_modified_ts is strictly greater than the last saved ts.
         """
         alerts: List[Dict[str, Any]] = []
-        new_state: Dict[str, int] = {}
+        # Accumulate state updates for the whole cycle; write once at the end.
+        state_updates: Dict[str, Dict] = {}
         batch_size = self.config.get("batch_size", 100)
-        page = 0
-
-        # Optional tag filter forwarded to the API to reduce payload size
         api_tag_filter = self.api_config.get("monitor_tags_filter", "")
+        page = 0
 
         while True:
             params: Dict[str, Any] = {
@@ -219,8 +235,8 @@ class DatadogConnector(SIEMConnector):
 
             if DEBUG_MODE:
                 print(
-                    f"[DEBUG] DatadogConnector: fetching monitors page={page} "
-                    f"page_size={batch_size}"
+                    f"[DEBUG] DatadogConnector: GET /api/v1/monitor "
+                    f"page={page} page_size={batch_size}"
                 )
 
             try:
@@ -238,28 +254,20 @@ class DatadogConnector(SIEMConnector):
                     class_name="DatadogConnector",
                     method="_collect_triggered_monitors",
                     event_type="error",
-                    description=f"HTTP request failed on page {page}: {e}",
+                    description=f"Request failed on page {page}: {e}",
                 )
                 if DEBUG_MODE:
-                    print(f"[ERROR] DatadogConnector: HTTP error on page {page}: {e}")
+                    print(f"[ERROR] DatadogConnector: request error page {page}: {e}")
                 break
 
             if response.status_code == 429:
                 retry_after = int(response.headers.get("X-RateLimit-Reset", 60))
                 if DEBUG_MODE:
-                    print(
-                        f"[WARN] DatadogConnector: rate-limited, "
-                        f"sleeping {retry_after}s"
-                    )
+                    print(f"[WARN] DatadogConnector: rate-limited, waiting {retry_after}s")
                 time.sleep(retry_after)
                 continue
 
             if response.status_code != 200:
-                if DEBUG_MODE:
-                    print(
-                        f"[ERROR] DatadogConnector: monitors API returned "
-                        f"{response.status_code}: {response.text[:200]}"
-                    )
                 log_event(
                     event_id=997,
                     solution_name="inopli_middleware",
@@ -269,97 +277,117 @@ class DatadogConnector(SIEMConnector):
                     event_type="error",
                     description=f"HTTP {response.status_code} on page {page}",
                 )
+                if DEBUG_MODE:
+                    print(
+                        f"[ERROR] DatadogConnector: HTTP {response.status_code} "
+                        f"on page {page}: {response.text[:200]}"
+                    )
                 break
 
             monitors = response.json()
             if not monitors:
-                # No more pages
                 break
 
             for monitor in monitors:
-                monitor_id = monitor.get("id")
+                monitor_id_key = str(monitor.get("id"))
                 overall_state = monitor.get("overall_state", "")
+                state_modified_raw = monitor.get("overall_state_modified", "")
+                current_ts = self._parse_iso_ts(state_modified_raw)
 
+                # Always update the state entry for this monitor so that
+                # transitions from non-alert → alert are correctly detected
+                # in subsequent polling cycles.
+                saved_entry = self.monitor_state.get(monitor_id_key, {})
+                state_updates[monitor_id_key] = {
+                    "name": monitor.get("name", ""),
+                    "overall_state": overall_state,
+                    "state_modified_ts": current_ts,
+                    "state_modified_raw": state_modified_raw,
+                    # Preserve sent metadata; will be updated below if we send.
+                    "last_sent_at": saved_entry.get("last_sent_at"),
+                    "send_count": saved_entry.get("send_count", 0),
+                }
+
+                # Only forward if state is actionable AND has changed since
+                # the last time we saw this monitor.
                 if overall_state not in self.alert_states:
                     continue
 
-                # Determine the maximum last_triggered_ts across all groups
-                max_ts = self._get_max_triggered_ts(monitor)
-                monitor_id_key = str(monitor_id)
-                saved_ts = self.monitor_state.get(monitor_id_key, 0)
-
-                if max_ts <= saved_ts:
-                    # Already forwarded this trigger cycle
+                saved_ts = saved_entry.get("state_modified_ts", 0)
+                if current_ts <= saved_ts:
                     if DEBUG_MODE:
                         print(
-                            f"[DEBUG] DatadogConnector: skipping monitor {monitor_id} "
-                            f"(last_triggered_ts unchanged: {max_ts})"
+                            f"[DEBUG] DatadogConnector: skip {monitor_id_key} "
+                            f"'{monitor.get('name', '')[:50]}' — "
+                            f"state unchanged (ts={current_ts})"
                         )
                     continue
 
-                # Track new state regardless of validation outcome
-                new_state[monitor_id_key] = max_ts
-
-                # Enrich monitor dict with Inopli required fields
+                # Enrich with Inopli-required fields
+                now_iso = datetime.now(timezone.utc).isoformat()
                 monitor["_tenant_id"] = self.tenant_id
                 monitor["_siem_source"] = "datadog"
-                monitor["timestamp"] = datetime.now(timezone.utc).isoformat()
+                monitor["timestamp"] = now_iso
                 monitor["detection_rule_id"] = monitor.get("name", "Unknown Monitor")
                 monitor["severity"] = self._map_severity(monitor.get("priority"))
                 monitor["triggered_groups"] = self._get_triggered_groups(monitor)
 
                 if self.validate_alert(monitor):
                     alerts.append(monitor)
+                    # Record send metadata in the pending state update
+                    state_updates[monitor_id_key]["last_sent_at"] = now_iso
+                    state_updates[monitor_id_key]["send_count"] = (
+                        saved_entry.get("send_count", 0) + 1
+                    )
                     if DEBUG_MODE:
                         print(
-                            f"[DEBUG] DatadogConnector: queued monitor {monitor_id} "
-                            f"'{monitor.get('name', '')}' state={overall_state}"
+                            f"[DEBUG] DatadogConnector: queued monitor {monitor_id_key} "
+                            f"'{monitor.get('name', '')[:60]}' "
+                            f"state={overall_state} ts={current_ts}"
                         )
 
-            # Datadog returns fewer items than page_size on the last page
             if len(monitors) < batch_size:
                 break
-
             page += 1
 
-        # Persist updated state only for monitors that were forwarded
-        if new_state:
+        # Merge all state updates and persist once per cycle
+        if state_updates:
             with self._state_lock:
-                self.monitor_state.update(new_state)
+                self.monitor_state.update(state_updates)
             self._save_state()
 
         return alerts
 
-    def _get_max_triggered_ts(self, monitor: Dict[str, Any]) -> int:
-        """Return the maximum last_triggered_ts across all monitor groups."""
-        state = monitor.get("state", {}) or {}
-        groups = state.get("groups", {}) or {}
-        max_ts = 0
-        for group_data in groups.values():
-            ts = group_data.get("last_triggered_ts") or 0
-            if ts and ts > max_ts:
-                max_ts = ts
-        return max_ts
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _parse_iso_ts(self, raw: str) -> int:
+        """Parse an ISO-8601 string to a Unix timestamp (int). Returns 0 on failure."""
+        if not raw:
+            return 0
+        try:
+            return int(datetime.fromisoformat(raw).timestamp())
+        except Exception:
+            return 0
 
     def _get_triggered_groups(self, monitor: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Returns the subset of monitor groups whose status is in alert_states,
-        to be included in the Inopli payload for context.
+        Returns groups (from monitor.state.groups) whose status is in
+        alert_states.  Usually empty for the list endpoint — included for
+        completeness when the field is present.
         """
-        state = monitor.get("state", {}) or {}
-        groups = state.get("groups", {}) or {}
-        triggered = []
-        for group_name, group_data in groups.items():
-            if group_data.get("status") in self.alert_states:
-                triggered.append(
-                    {
-                        "group": group_name,
-                        "status": group_data.get("status"),
-                        "last_triggered_ts": group_data.get("last_triggered_ts"),
-                        "last_notified_ts": group_data.get("last_notified_ts"),
-                    }
-                )
-        return triggered
+        groups = (monitor.get("state") or {}).get("groups") or {}
+        return [
+            {
+                "group": name,
+                "status": gd.get("status"),
+                "last_triggered_ts": gd.get("last_triggered_ts"),
+                "last_notified_ts": gd.get("last_notified_ts"),
+            }
+            for name, gd in groups.items()
+            if gd.get("status") in self.alert_states
+        ]
 
     # ------------------------------------------------------------------
     # State persistence
@@ -371,42 +399,83 @@ class DatadogConnector(SIEMConnector):
             f"config/datadog_{self.name}_state.json",
         )
 
-    def _load_state(self) -> Dict[str, int]:
+    def _load_state(self) -> Dict[str, Dict]:
+        """
+        Loads the state file and returns a dict of {monitor_id_str: entry}.
+
+        Handles two on-disk formats:
+          v1 (legacy) — {"monitor_state": {"id": int_ts}, ...}
+          v2 (current) — {"version": 2, "monitors": {"id": {...}}, ...}
+        """
+        path = self._state_file_path()
+        if not os.path.exists(path):
+            return {}
         try:
-            path = self._state_file_path()
-            if os.path.exists(path):
-                with open(path, "r") as f:
-                    data = json.load(f)
-                    state = data.get("monitor_state", {})
-                    if DEBUG_MODE:
-                        print(
-                            f"[DEBUG] DatadogConnector: loaded state from {path} "
-                            f"({len(state)} entries)"
-                        )
-                    return state
+            with open(path, "r") as f:
+                data = json.load(f)
+
+            version = data.get("version", 1)
+
+            if version >= 2:
+                monitors = data.get("monitors", {})
+                if DEBUG_MODE:
+                    print(
+                        f"[DEBUG] DatadogConnector: loaded v2 state from '{path}' "
+                        f"({len(monitors)} monitors)"
+                    )
+                return monitors
+
+            # Migrate v1 → v2 in-memory (file will be rewritten on next save)
+            legacy = data.get("monitor_state", {})
+            migrated = {
+                mid: {
+                    "name": "",
+                    "overall_state": "",
+                    "state_modified_ts": int(ts),
+                    "state_modified_raw": "",
+                    "last_sent_at": None,
+                    "send_count": 0,
+                }
+                for mid, ts in legacy.items()
+                if isinstance(ts, (int, float))
+            }
+            if DEBUG_MODE:
+                print(
+                    f"[DEBUG] DatadogConnector: migrated v1→v2 state from '{path}' "
+                    f"({len(migrated)} monitors)"
+                )
+            return migrated
+
         except Exception as e:
             if DEBUG_MODE:
                 print(f"[ERROR] DatadogConnector._load_state: {e}")
-        return {}
+            return {}
 
     def _save_state(self):
+        """Writes the current monitor state to disk in v2 format."""
         if not self.collection_control.get("save_state", True):
             return
+        path = self._state_file_path()
         try:
-            path = self._state_file_path()
-            os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
+            dir_part = os.path.dirname(path)
+            if dir_part:
+                os.makedirs(dir_part, exist_ok=True)
+
             with self._state_lock:
-                data = {
-                    "monitor_state": self.monitor_state,
-                    "last_updated": datetime.now().isoformat(),
+                payload = {
+                    "version": _STATE_VERSION,
                     "source": self.name,
+                    "saved_at": datetime.now().isoformat(),
+                    "monitors": self.monitor_state,
                 }
+
             with open(path, "w") as f:
-                json.dump(data, f, indent=2)
+                json.dump(payload, f, indent=2)
+
             if DEBUG_MODE:
                 print(
-                    f"[DEBUG] DatadogConnector: saved state to {path} "
-                    f"({len(self.monitor_state)} entries)"
+                    f"[DEBUG] DatadogConnector: saved state to '{path}' "
+                    f"({len(self.monitor_state)} monitors)"
                 )
         except Exception as e:
             if DEBUG_MODE:
@@ -441,14 +510,16 @@ class DatadogConnector(SIEMConnector):
             try:
                 if DEBUG_MODE:
                     print(
-                        f"[DEBUG] DatadogConnector._run_loop: collection cycle for {self.name}"
+                        f"[DEBUG] DatadogConnector._run_loop: "
+                        f"collection cycle for '{self.name}'"
                     )
 
                 alerts = self.collect_alerts()
 
                 if DEBUG_MODE:
                     print(
-                        f"[DEBUG] DatadogConnector._run_loop: collected {len(alerts)} alerts"
+                        f"[DEBUG] DatadogConnector._run_loop: "
+                        f"collected {len(alerts)} alert(s)"
                     )
 
                 if alerts:
@@ -458,23 +529,22 @@ class DatadogConnector(SIEMConnector):
                         if self.validate_alert(alert):
                             if DEBUG_MODE:
                                 print(
-                                    f"[DEBUG] DatadogConnector._run_loop: processing "
-                                    f"monitor {alert.get('id', 'unknown')} "
-                                    f"'{alert.get('name', '')}'"
+                                    f"[DEBUG] DatadogConnector._run_loop: "
+                                    f"processing monitor {alert.get('id')} "
+                                    f"'{alert.get('name', '')[:60]}'"
                                 )
                             processor.process_alert(alert, self.name)
                         else:
                             if DEBUG_MODE:
                                 print(
-                                    f"[DEBUG] DatadogConnector._run_loop: monitor "
-                                    f"{alert.get('id', 'unknown')} failed post-collect "
-                                    f"validation"
+                                    f"[DEBUG] DatadogConnector._run_loop: "
+                                    f"monitor {alert.get('id')} failed post-collect validation"
                                 )
                 else:
                     if DEBUG_MODE:
                         print(
-                            f"[DEBUG] DatadogConnector._run_loop: no new alerts, "
-                            f"skipping AlertProcessor"
+                            f"[DEBUG] DatadogConnector._run_loop: "
+                            f"no new alerts — skipping AlertProcessor"
                         )
 
                 self.last_collection_time = datetime.now()
