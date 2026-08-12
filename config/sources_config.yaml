@@ -81,11 +81,14 @@ tenants:
         module: "qradar"
         connector_type: "qradar"
         polling_interval: 1  # minutes between API calls
+        # collection_mode: "offenses" | "log_activity"
+        collection_mode: "offenses"
         api_config:
           base_url: "https://your-qradar-server.com"
           auth_token: "YOUR_QRADAR_AUTH_TOKEN"
           api_version: "17"
           verify_ssl: false
+        # --- offenses mode settings ---
         collection_control:
           last_offense_id: 0
           save_last_id: true
@@ -97,6 +100,20 @@ tenants:
           min_severity: 5
         source_filters:
           source_networks: ["*"]
+        # --- log_activity mode settings ---
+        log_activity_config:
+          # AQL WHERE clause appended to the query (without the WHERE keyword).
+          # Leave empty to collect all events.
+          filter: "QIDNAME(qid) LIKE '%SS-PE-SSO-CU%'"
+          # How far back to look on the very first run (subsequent runs use last-seen starttime)
+          lookback_minutes: 60
+          # Fields selected in the AQL query
+          fields: "starttime, sourceip, destinationip, sourceport, destinationport, protocolid, logsourceid, qid, QIDNAME(qid) AS qidname, category, magnitude, username, eventcount, identityip"
+          # State file to persist the last collected event starttime
+          state_file_path: "config/qradar_prod_log_activity_state.json"
+          # Ariel search polling settings
+          search_timeout_seconds: 120
+          poll_interval_seconds: 5
         alert_mode: "all"
       
       arcsight_prod:

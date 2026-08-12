@@ -31,7 +31,7 @@ FIELD_MAPPING = {
         "destination_networks", "dst_networks", "dest_networks"
     ],
     "rule_id": [
-        "rule_id", "detection_rule_id", "description"  # QRadar: use description as rule_id
+        "rule_id", "detection_rule_id", "qidname", "description"  # QRadar offenses: description; log_activity: qidname
     ],
     "credibility": [
         "credibility", "confidence", "relevance"  # QRadar specific

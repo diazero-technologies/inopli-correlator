@@ -19,13 +19,18 @@ class QRadarConnector(SIEMConnector):
         self.tenant_id = config.get("tenant_id", "")
         self.tenant_config = config.get("tenant_config", {})
         self.collection_control = config.get("collection_control", {})
+        self.collection_mode = config.get("collection_mode", "offenses")
+        self.log_activity_config = config.get("log_activity_config", {})
         self.alert_queue = []
         self.queue_lock = threading.Lock()
         self.last_collection_time = None
         self.session = requests.Session()
         
-        # Initialize last offense ID control
+        # Initialize last offense ID control (offenses mode)
         self.last_offense_id = self._load_last_offense_id()
+        
+        # Initialize last event starttime control (log_activity mode, epoch ms)
+        self.last_event_starttime = self._load_last_event_starttime()
         
         # Configure session with SSL verification settings
         self.session.verify = self.api_config.get("verify_ssl", False)
@@ -56,7 +61,11 @@ class QRadarConnector(SIEMConnector):
         if DEBUG_MODE:
             print(f"[DEBUG] Initializing QRadarConnector "
                   f"for '{name}' with tenant {self.tenant_id}")
-            print(f"[DEBUG] Last offense ID: {self.last_offense_id}")
+            print(f"[DEBUG] Collection mode: {self.collection_mode}")
+            if self.collection_mode == "offenses":
+                print(f"[DEBUG] Last offense ID: {self.last_offense_id}")
+            else:
+                print(f"[DEBUG] Last event starttime: {self.last_event_starttime}")
 
     def connect(self) -> bool:
         try:
@@ -96,16 +105,20 @@ class QRadarConnector(SIEMConnector):
 
     def collect_alerts(self) -> List[Dict[str, Any]]:
         if DEBUG_MODE:
-            print(f"[DEBUG] QRadarConnector.collect_alerts: Starting collection for {self.name}")
+            print(f"[DEBUG] QRadarConnector.collect_alerts: Starting collection for {self.name} (mode={self.collection_mode})")
         
         alerts = []
         
         try:
-            # Get offenses for this specific tenant
-            if DEBUG_MODE:
-                print(f"[DEBUG] QRadarConnector.collect_alerts: Calling _collect_tenant_offenses for tenant {self.tenant_id}")
+            if self.collection_mode == "log_activity":
+                if DEBUG_MODE:
+                    print(f"[DEBUG] QRadarConnector.collect_alerts: Calling _collect_log_activity for tenant {self.tenant_id}")
+                tenant_alerts = self._collect_log_activity()
+            else:
+                if DEBUG_MODE:
+                    print(f"[DEBUG] QRadarConnector.collect_alerts: Calling _collect_tenant_offenses for tenant {self.tenant_id}")
+                tenant_alerts = self._collect_tenant_offenses()
             
-            tenant_alerts = self._collect_tenant_offenses()
             alerts.extend(tenant_alerts)
             
             if DEBUG_MODE:
@@ -130,6 +143,48 @@ class QRadarConnector(SIEMConnector):
             print(f"[DEBUG] QRadarConnector.collect_alerts: Returning {len(alerts)} alerts")
         
         return alerts
+
+    def _load_last_event_starttime(self) -> Optional[int]:
+        """Load the last collected event starttime (epoch ms) for log_activity mode."""
+        try:
+            state_file = self.log_activity_config.get("state_file_path", "config/qradar_log_activity_state.json")
+            if os.path.exists(state_file):
+                with open(state_file, 'r') as f:
+                    data = json.load(f)
+                    ts = data.get("last_event_starttime")
+                    if DEBUG_MODE:
+                        print(f"[DEBUG] Loaded last event starttime from file: {ts}")
+                    return ts
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"[ERROR] Error loading last event starttime: {e}")
+        return None
+
+    def _save_last_event_starttime(self, starttime_ms: int):
+        """Persist the last collected event starttime (epoch ms) for log_activity mode."""
+        try:
+            state_file = self.log_activity_config.get("state_file_path", "config/qradar_log_activity_state.json")
+            os.makedirs(os.path.dirname(state_file), exist_ok=True)
+            data = {
+                "last_event_starttime": starttime_ms,
+                "last_updated": datetime.now().isoformat()
+            }
+            with open(state_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            if DEBUG_MODE:
+                print(f"[DEBUG] Saved last event starttime: {starttime_ms}")
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"[ERROR] Error saving last event starttime: {e}")
+            log_event(
+                event_id=997,
+                solution_name="inopli_middleware",
+                data_source=self.name,
+                class_name="QRadarConnector",
+                method="_save_last_event_starttime",
+                event_type="error",
+                description=str(e)
+            )
 
     def _load_last_offense_id(self) -> int:
         try:
@@ -283,10 +338,173 @@ class QRadarConnector(SIEMConnector):
         
         return alerts
 
+    def _collect_log_activity(self) -> List[Dict[str, Any]]:
+        """Collect events via the QRadar Ariel search API (log_activity mode).
+
+        Flow:
+          1. POST /api/ariel/searches  – create the AQL search
+          2. GET  /api/ariel/searches/{id}  – poll until COMPLETED
+          3. GET  /api/ariel/searches/{id}/results  – fetch rows
+        """
+        alerts = []
+        la_cfg = self.log_activity_config
+
+        try:
+            query_filter = la_cfg.get("filter", "")
+            lookback_minutes = la_cfg.get("lookback_minutes", 60)
+            fields = la_cfg.get(
+                "fields",
+                "starttime, sourceip, destinationip, sourceport, destinationport, "
+                "protocolid, logsourceid, qid, QIDNAME(qid) AS qidname, category, "
+                "magnitude, username, eventcount, identityip"
+            )
+
+            # Build WHERE clause combining the starttime cursor and the user filter
+            where_parts = []
+            if self.last_event_starttime is not None:
+                # Use epoch ms – QRadar starttime field is milliseconds since epoch
+                where_parts.append(f"starttime > {self.last_event_starttime}")
+            if query_filter:
+                where_parts.append(f"({query_filter})")
+
+            if where_parts:
+                time_clause = " AND ".join(where_parts)
+                aql = f"SELECT {fields} FROM events WHERE {time_clause} ORDER BY starttime ASC"
+            else:
+                aql = (
+                    f"SELECT {fields} FROM events "
+                    f"ORDER BY starttime ASC LAST {lookback_minutes} MINUTES"
+                )
+
+            if DEBUG_MODE:
+                print(f"[DEBUG] AQL query: {aql}")
+
+            headers = self._get_auth_headers()
+            base_url = self.api_config["base_url"]
+
+            # --- Step 1: create search ---
+            create_resp = self.session.post(
+                f"{base_url}/api/ariel/searches",
+                headers=headers,
+                params={"query_expression": aql},
+                timeout=30
+            )
+
+            if create_resp.status_code not in (200, 201, 202):
+                if DEBUG_MODE:
+                    print(f"[ERROR] Failed to create Ariel search. "
+                          f"Status: {create_resp.status_code}, Body: {create_resp.text[:500]}")
+                return alerts
+
+            search_id = create_resp.json().get("search_id")
+            if not search_id:
+                if DEBUG_MODE:
+                    print(f"[ERROR] No search_id in Ariel search creation response")
+                return alerts
+
+            if DEBUG_MODE:
+                print(f"[DEBUG] Ariel search created: {search_id}")
+
+            # --- Step 2: poll for completion ---
+            max_wait = la_cfg.get("search_timeout_seconds", 120)
+            poll_interval = la_cfg.get("poll_interval_seconds", 5)
+            elapsed = 0
+
+            while elapsed < max_wait:
+                status_resp = self.session.get(
+                    f"{base_url}/api/ariel/searches/{search_id}",
+                    headers=headers,
+                    timeout=30
+                )
+
+                if status_resp.status_code != 200:
+                    if DEBUG_MODE:
+                        print(f"[ERROR] Failed to get search status. Status: {status_resp.status_code}")
+                    return alerts
+
+                status_data = status_resp.json()
+                status = status_data.get("status", "")
+
+                if DEBUG_MODE:
+                    progress = status_data.get("progress", "")
+                    print(f"[DEBUG] Ariel search {search_id} status: {status} progress: {progress}")
+
+                if status == "COMPLETED":
+                    break
+                elif status in ("ERROR", "CANCELLED"):
+                    if DEBUG_MODE:
+                        print(f"[ERROR] Ariel search {search_id} ended with status: {status}")
+                    return alerts
+
+                time.sleep(poll_interval)
+                elapsed += poll_interval
+            else:
+                if DEBUG_MODE:
+                    print(f"[ERROR] Ariel search {search_id} timed out after {max_wait}s")
+                return alerts
+
+            # --- Step 3: fetch results ---
+            results_resp = self.session.get(
+                f"{base_url}/api/ariel/searches/{search_id}/results",
+                headers=headers,
+                timeout=60
+            )
+
+            if results_resp.status_code != 200:
+                if DEBUG_MODE:
+                    print(f"[ERROR] Failed to get search results. Status: {results_resp.status_code}")
+                return alerts
+
+            events = results_resp.json().get("events", [])
+
+            if DEBUG_MODE:
+                print(f"[DEBUG] Ariel search {search_id} returned {len(events)} events")
+
+            max_starttime = self.last_event_starttime or 0
+
+            for event in events:
+                event["_tenant_id"] = self.tenant_id
+                event["_siem_source"] = "qradar"
+                event["_collection_mode"] = "log_activity"
+                event["timestamp"] = datetime.now(timezone.utc).isoformat()
+                event["detection_rule_id"] = event.get("qidname") or str(event.get("qid", "Unknown"))
+
+                starttime = event.get("starttime", 0)
+                if isinstance(starttime, int) and starttime > max_starttime:
+                    max_starttime = starttime
+
+                alerts.append(event)
+
+            # Persist cursor so the next poll only fetches newer events
+            if max_starttime and max_starttime != self.last_event_starttime:
+                self.last_event_starttime = max_starttime
+                self._save_last_event_starttime(max_starttime)
+
+        except Exception as e:
+            if DEBUG_MODE:
+                print(f"[ERROR] Error collecting log activity for tenant {self.tenant_id}: {e}")
+                import traceback
+                traceback.print_exc()
+            log_event(
+                event_id=997,
+                solution_name="inopli_middleware",
+                data_source=self.name,
+                class_name="QRadarConnector",
+                method="_collect_log_activity",
+                event_type="error",
+                description=f"Tenant {self.tenant_id}: {str(e)}"
+            )
+
+        return alerts
+
     def validate_alert(self, alert: Dict[str, Any]) -> bool:
         tenant_id = alert.get("_tenant_id")
         if not tenant_id or tenant_id != self.tenant_id:
             return False
+
+        # Log activity events are pre-filtered by the AQL query; skip offense-specific checks
+        if alert.get("_collection_mode") == "log_activity":
+            return True
         
         # Apply rule filters
         rule_filters = self.config.get("rule_filters", {})

@@ -151,8 +151,14 @@ class MiddlewareManager:
                 connector_config = {
                     "enabled": source_config.get("enabled", False),
                     "polling_interval": source_config.get("polling_interval", 5),
+                    "collection_mode": source_config.get("collection_mode", "offenses"),
                     "api_config": source_config.get("api_config", {}),
                     "collection_control": source_config.get("collection_control", {}),
+                    "log_activity_config": source_config.get("log_activity_config", {}),
+                    "batch_size": source_config.get("batch_size", 100),
+                    "status_filter": source_config.get("status_filter", "OPEN"),
+                    "rule_filters": source_config.get("rule_filters", {}),
+                    "source_filters": source_config.get("source_filters", {}),
                     "tenant_id": tenant_id,
                     "tenant_config": self.tenants_config.get(tenant_id, {})
                 }
