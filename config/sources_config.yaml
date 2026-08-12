@@ -104,7 +104,7 @@ tenants:
         log_activity_config:
           # AQL WHERE clause appended to the query (without the WHERE keyword).
           # Leave empty to collect all events.
-          filter: "QIDNAME(qid) LIKE '%SS-PE-SSO-CU%'"
+          filter: ""
           # How far back to look on the very first run (subsequent runs use last-seen starttime)
           lookback_minutes: 60
           # Fields selected in the AQL query

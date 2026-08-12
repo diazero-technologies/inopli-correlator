@@ -69,20 +69,23 @@ class QRadarConnector(SIEMConnector):
 
     def connect(self) -> bool:
         try:
-            # Test connection by making a simple API call
-            test_url = f"{self.api_config['base_url']}/api/siem/offenses"
             headers = self._get_auth_headers()
-            
-            response = self.session.get(
-                test_url,
-                headers=headers,
-                params={"limit": 1},
-                timeout=10
-            )
-            
+
+            if self.collection_mode == "log_activity":
+                test_url = f"{self.api_config['base_url']}/api/ariel/searches"
+                response = self.session.get(test_url, headers=headers, timeout=10)
+            else:
+                test_url = f"{self.api_config['base_url']}/api/siem/offenses"
+                response = self.session.get(
+                    test_url,
+                    headers=headers,
+                    params={"limit": 1},
+                    timeout=10
+                )
+
             if response.status_code == 200:
                 if DEBUG_MODE:
-                    print(f"[DEBUG] Successfully connected to QRadar API")
+                    print(f"[DEBUG] Successfully connected to QRadar API ({self.collection_mode} mode)")
                 return True
             else:
                 if DEBUG_MODE:
